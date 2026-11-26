@@ -349,7 +349,19 @@ window.WIREDECK_I18N = {
     "guide_btn_create_shortcut": "创建桌面快捷方式",
     "guide_btn_shortcut_done": "✓ 已建桌面快捷方式",
     "guide_btn_enter_client": "进入 {client}",
-    "guide_btn_get_client": "获取 {client}"
+    "guide_btn_get_client": "获取 {client}",
+    "guide_btn_pick_client": "指定本地程序",
+    "guide_btn_restore_shortcut": "恢复上网快捷方式",
+    "guide_btn_restore_done": "✓ 已建恢复快捷方式",
+    "guide_ping_fail_cable": "未检测到网线链路：请确认千兆网线已插紧且主机已开机",
+    "guide_ping_fail_nat": "尚未开启游戏直连共享：请先点上一步「开启游戏直连」",
+    "guide_ping_fail_ip": "网线已通但主机未回应：请对照第 4 步核对主机手动 IP/掩码/网关，或确认主机未休眠",
+    "guide_ping_fail_hs_off": "5 GHz 热点尚未开启：请先点前面步骤的「开启 5GHz 热点」",
+    "guide_ping_fail_hs_noclient": "热点已开但尚未见主机接入：请在主机 Wi-Fi 中连入热点名并等待 5 秒后重试",
+    "guide_ping_fail_lan_empty": "尚未填写同网段设备 IP：请先回到上一步填入设备 IPv4 并点保存",
+    "guide_ping_fail_ap_iso": "电脑能连网关但无法互访主机（疑似校园网/路由器 AP 隔离）：建议改用 5G 热点直连",
+    "guide_switch_to_hotspot": "切到 5G 热点绕过隔离",
+    "guide_quickplay_blocked": "检测到未完成的前置步骤，已定位到需要处理的位置"
   },
   "zh-TW": {
     "nav_home": "有線直連",
@@ -701,7 +713,19 @@ window.WIREDECK_I18N = {
     "guide_btn_create_shortcut": "建立桌面捷徑",
     "guide_btn_shortcut_done": "✓ 已建桌面捷徑",
     "guide_btn_enter_client": "進入 {client}",
-    "guide_btn_get_client": "取得 {client}"
+    "guide_btn_get_client": "取得 {client}",
+    "guide_btn_pick_client": "指定本機程式",
+    "guide_btn_restore_shortcut": "恢復上網捷徑",
+    "guide_btn_restore_done": "✓ 已建恢復捷徑",
+    "guide_ping_fail_cable": "未偵測到網路線連線：請確認千兆網路線已插緊且主機已開機",
+    "guide_ping_fail_nat": "尚未開啟遊戲直連共享：請先點上一步「開啟遊戲直連」",
+    "guide_ping_fail_ip": "網路線已通但主機無回應：請對照第 4 步核對主機手動 IP／遮罩／閘道，或確認未休眠",
+    "guide_ping_fail_hs_off": "5 GHz 熱點尚未開啟：請先點前面步驟的「開啟 5GHz 熱點」",
+    "guide_ping_fail_hs_noclient": "熱點已開但尚無主機連入：請於主機 Wi-Fi 連入熱點並等 5 秒重試",
+    "guide_ping_fail_lan_empty": "尚未填寫同網段裝置 IP：請回上一步填入裝置 IPv4 並點儲存",
+    "guide_ping_fail_ap_iso": "電腦可連閘道但無法連通主機（疑似 AP 隔離）：建議改用 5G 熱點直連",
+    "guide_switch_to_hotspot": "切至 5G 熱點繞過隔離",
+    "guide_quickplay_blocked": "偵測到尚未完成的前置步驟，已定位至需處理位置"
   },
   "en": {
     "nav_home": "Wired Direct",
@@ -773,7 +797,7 @@ window.WIREDECK_I18N = {
     "footer_launch": "Launch Streamer",
     "footer_copy_ai": "Copy for AI",
     "badge_ai_ext": "AI Ext",
-    "wizard_title": "Connection Walkthrough",
+    "wizard_title": "Setup Guide",
     "wizard_sub": "Follow each step in order across your PC and console — ready in minutes",
     "wiz_s1_title": "1. Wired NIC Check",
     "wiz_s1_desc": "Wake disabled NIC / PCIe port and disable EEE power-saving",
@@ -1053,7 +1077,19 @@ window.WIREDECK_I18N = {
     "guide_btn_create_shortcut": "Create Shortcut",
     "guide_btn_shortcut_done": "✓ Shortcut Created",
     "guide_btn_enter_client": "Launch {client}",
-    "guide_btn_get_client": "Get {client}"
+    "guide_btn_get_client": "Get {client}",
+    "guide_btn_pick_client": "Locate .exe",
+    "guide_btn_restore_shortcut": "Restore Shortcut",
+    "guide_btn_restore_done": "✓ Restore Created",
+    "guide_ping_fail_cable": "Ethernet link is down: ensure the cable is plugged in and your console is powered on.",
+    "guide_ping_fail_nat": "WinNAT direct sharing is off yet: go back to Step 2 and enable Direct Sharing first.",
+    "guide_ping_fail_ip": "Cable is up, no reply from console: double-check Step 4 static IP/Mask/Gateway or wake console.",
+    "guide_ping_fail_hs_off": "5 GHz hotspot is not started yet: enable it in the earlier step first.",
+    "guide_ping_fail_hs_noclient": "Hotspot is running, no device joined yet: connect your device's Wi-Fi and wait ~5s.",
+    "guide_ping_fail_lan_empty": "No LAN device IP saved yet: go back 1 step, enter your device IPv4, and click Save.",
+    "guide_ping_fail_ap_iso": "Router OK, device unreachable (AP Isolation suspected): switch to 5G Hotspot to bypass.",
+    "guide_switch_to_hotspot": "Switch to 5G Hotspot",
+    "guide_quickplay_blocked": "A prerequisite step needs attention — jumped there for you."
   },
   "ja": {
     "nav_home": "有線直結",
@@ -1405,6 +1441,18 @@ window.WIREDECK_I18N = {
     "guide_btn_create_shortcut": "ショートカット作成",
     "guide_btn_shortcut_done": "✓ 作成済み",
     "guide_btn_enter_client": "{client} を開く",
-    "guide_btn_get_client": "{client} を入手"
+    "guide_btn_get_client": "{client} を入手",
+    "guide_btn_pick_client": "ローカル指定",
+    "guide_btn_restore_shortcut": "復元ショートカット",
+    "guide_btn_restore_done": "✓ 復元作成済み",
+    "guide_ping_fail_cable": "LAN リンク未接続：ケーブル接続と本体の電源を確認してください。",
+    "guide_ping_fail_nat": "直結共有 (WinNAT) が未有効です：ステップ 2 で直結を有効にしてください。",
+    "guide_ping_fail_ip": "リンク正常・本体応答なし：ステップ 4 の固定 IP/マスク/GW と本体スリープを確認してください。",
+    "guide_ping_fail_hs_off": "5 GHz ホットスポットが未起動です：前のステップで開始してください。",
+    "guide_ping_fail_hs_noclient": "起動済み・機器未接続：本体 Wi-Fi から接続して約 5 秒後に再テストしてください。",
+    "guide_ping_fail_lan_empty": "同一 LAN の本体 IP が未保存です：前のステップで IPv4 を保存してください。",
+    "guide_ping_fail_ap_iso": "ルーター可・本体不可（AP 分離の疑い）：5G ホットスポット直結への切替をお勧めします。",
+    "guide_switch_to_hotspot": "5G ホットスポットへ切替",
+    "guide_quickplay_blocked": "未完了の前提ステップを検出したため該当箇所へ移動しました。"
   }
 };

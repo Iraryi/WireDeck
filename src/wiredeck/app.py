@@ -35,6 +35,7 @@ from wiredeck.probes import _ping_peer, collect_system_snapshot
 from wiredeck.ps_runner import is_admin, run_elevated_worker, run_powershell
 from wiredeck.stream_client import (
     create_play_shortcut,
+    create_restore_shortcut,
     download_and_verify_asset,
     fetch_latest_xstreaming_release,
     launch_stream_client,
@@ -289,6 +290,7 @@ class WireDeckApi:
         self._last_report: DiagnosticReport | None = None
         self._last_wireless_report: DiagnosticReport | None = None
         self._bridge: LocalBridgeServer | None = None
+        self._window: Any = None
         if preview_state in ("wireless", "wireless_wizard"):
             self.cfg.active_transport = "wireless"
             self.cfg.wireless_submode = "hotspot"
@@ -553,6 +555,8 @@ class WireDeckApi:
             self.cfg.hotspot_prefer_5ghz = bool(patch["hotspot_prefer_5ghz"])
         if "onboarding_completed" in patch:
             self.cfg.onboarding_completed = bool(patch["onboarding_completed"])
+        if "custom_client_path" in patch:
+            self.cfg.custom_client_path = str(patch["custom_client_path"] or "").strip()
 
         if "host_ip" in patch:
             self.cfg.host_ip = str(host_addr)
@@ -744,7 +748,52 @@ class WireDeckApi:
             return {"ok": False, "code": "DOWNLOAD_FAILED", "message": f"下载校验失败（{exc}），已打开官方发布页"}
 
     def launch_stream_client(self) -> dict[str, Any]:
-        return launch_stream_client(preset_id=self.cfg.active_preset).to_dict()
+        return launch_stream_client(
+            preset_id=self.cfg.active_preset,
+            custom_path=self.cfg.custom_client_path,
+        ).to_dict()
+
+    def pick_stream_client(self) -> dict[str, Any]:
+        """Prompt user to pick a local custom streaming client .exe and save it per-preset."""
+        if self._preview_state:
+            return {"ok": True, "code": "PREVIEW_ONLY", "path": "D:\\Games\\XStreaming\\XStreaming.exe", "filename": "XStreaming.exe"}
+        if self._window is None:
+            return {"ok": False, "code": "NO_WINDOW"}
+        try:
+            import webview
+
+            picked = self._window.create_file_dialog(
+                webview.OPEN_DIALOG,
+                allow_multiple=False,
+                file_types=("Executable (*.exe)", "All files (*.*)"),
+            )
+            if not picked:
+                return {"ok": False, "code": "CANCELLED"}
+            chosen = str(picked[0] if isinstance(picked, (list, tuple)) else picked).strip()
+            if not chosen or not Path(chosen).is_file():
+                return {"ok": False, "code": "INVALID_FILE"}
+            self.cfg.custom_client_path = chosen
+            save_config(self.paths, self.cfg)
+            return {"ok": True, "code": "CUSTOM_CLIENT_SAVED", "path": chosen, "filename": Path(chosen).name}
+        except Exception as exc:
+            return {"ok": False, "code": "PICK_FAILED", "message": str(exc)}
+
+    def quick_play_now(self) -> dict[str, Any]:
+        """Activate configured connection mode if idle & launch streaming client cleanly."""
+        if self._preview_state:
+            return ActionResult(ok=True, code="PREVIEW_ONLY", message="预览模式下模拟已开网并启动客户端").to_dict()
+        done, fallback_view = _run_quick_play(
+            self,
+            preset_id=self.cfg.active_preset,
+            transport=self.cfg.active_transport,
+            submode=self.cfg.wireless_submode,
+        )
+        return {
+            "ok": done,
+            "code": "QUICK_PLAY_OK" if done else "QUICK_PLAY_BLOCKED",
+            "fallback_view": fallback_view,
+            "message": "" if done else "存在前置阻断或未找到客户端，已定位到需要处理的步骤",
+        }
 
     def create_play_shortcut(self) -> dict[str, Any]:
         """Create a Desktop .lnk Quick-Play shortcut for the current preset and transport."""
@@ -759,6 +808,20 @@ class WireDeckApi:
                 details={"filename": fname},
             ).to_dict()
         return create_play_shortcut(self.paths, self.cfg).to_dict()
+
+    def create_restore_shortcut(self) -> dict[str, Any]:
+        """Create a Desktop .lnk shortcut that restores normal Ethernet & Wi-Fi state."""
+        if self._preview_state:
+            from wiredeck.stream_client import build_restore_shortcut_name
+
+            fname = build_restore_shortcut_name(self.cfg)
+            return ActionResult(
+                ok=True,
+                code="PREVIEW_ONLY",
+                message=f"预览模式下模拟已创建：{fname}",
+                details={"filename": fname},
+            ).to_dict()
+        return create_restore_shortcut(self.paths, self.cfg).to_dict()
 
     def open_folder(self, kind: str) -> dict[str, Any]:
         mapping = {
@@ -932,7 +995,10 @@ def _run_quick_play(
                     return False, fallback_view
         else:
             w1 = next((l for l in w_rep.layers if l.layer == "W1"), None)
+            w2 = next((l for l in w_rep.layers if l.layer == "W2"), None)
             w4 = next((l for l in w_rep.layers if l.layer == "W4"), None)
+            if w2 and w2.status == Severity.FAIL:
+                return False, fallback_view
             anti_on = bool(w4 and w4.metrics.get("anti_stutter_active"))
             if not anti_on:
                 if w1 and w1.status == Severity.FAIL:
@@ -954,9 +1020,38 @@ def _run_quick_play(
 
     preset = get_preset(api.cfg.active_preset)
     if preset.uses_stream_client:
-        launch_res = launch_fn(preset_id=preset.id)
+        custom = api.cfg.custom_client_path.strip()
+        if launch_fn is launch_stream_client or custom:
+            launch_res = launch_fn(preset_id=preset.id, custom_path=custom) if launch_fn is launch_stream_client else launch_fn(preset_id=preset.id)
+        else:
+            launch_res = launch_fn(preset_id=preset.id)
         return (bool(launch_res.ok), "" if launch_res.ok else fallback_view)
     return False, fallback_view
+
+
+def _run_quick_restore(api: WireDeckApi) -> tuple[bool, str]:
+    """Restore active wired WinNAT, 5G hotspot, and Wi-Fi anti-stutter tuning back to daily normal."""
+    snap = api._snapshot_fn(api.cfg, probe_network=False)
+    rep = classify_snapshot(snap, api.cfg)
+    l4 = next((l for l in rep.layers if l.layer == "L4"), None)
+    if l4 and l4.metrics.get("nat_active"):
+        res = api._execute_or_elevate("disable-direct", {})
+        if not res.ok:
+            return False, "home"
+
+    w_snap = api._wireless_snapshot_fn(api.cfg, probe_network=False)
+    hs_on = str((w_snap.get("hotspot") or {}).get("state", "")).lower() == "on"
+    if hs_on:
+        res = api._execute_or_elevate("disable-hotspot", {})
+        if not res.ok:
+            return False, "wireless"
+
+    if (api.paths.runtime_dir / "wifi_backup.json").is_file():
+        res = api._execute_or_elevate("restore-wifi", {})
+        if not res.ok:
+            return False, "wireless"
+
+    return True, ""
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -1007,6 +1102,11 @@ def main(argv: list[str] | None = None) -> int:
         help="Activate configured connection mode if idle and launch streaming client",
     )
     parser.add_argument(
+        "--quick-restore",
+        action="store_true",
+        help="Restore active WinNAT sharing, hotspot, and Wi-Fi anti-stutter tuning",
+    )
+    parser.add_argument(
         "--transport",
         choices=["wired", "wireless"],
         default=None,
@@ -1021,13 +1121,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     title = f"{APP_NAME} v{APP_VERSION}"
-    mutex_handle: int | None = None
-    if not args.preview_state and not args.capture_to:
-        mutex_handle = _acquire_single_instance_mutex(title)
-        if mutex_handle == -1:
-            return 0
-
     api = WireDeckApi(preview_state=args.preview_state, preview_wizard_step=args.wizard_step)
+
     if args.quick_play and not args.preview_state:
         done, _ = _run_quick_play(
             api,
@@ -1036,11 +1131,16 @@ def main(argv: list[str] | None = None) -> int:
             submode=args.submode,
         )
         if done:
-            if mutex_handle and mutex_handle > 0 and os.name == "nt":
-                try:
-                    ctypes.windll.kernel32.CloseHandle(mutex_handle)
-                except Exception:
-                    pass
+            return 0
+    elif args.quick_restore and not args.preview_state:
+        done, _ = _run_quick_restore(api)
+        if done:
+            return 0
+
+    mutex_handle: int | None = None
+    if not args.preview_state and not args.capture_to:
+        mutex_handle = _acquire_single_instance_mutex(title)
+        if mutex_handle == -1:
             return 0
 
     # Enable crisp per-monitor DPI awareness on Windows
@@ -1080,6 +1180,7 @@ def main(argv: list[str] | None = None) -> int:
         background_color=bg_hex,
         resizable=True,
     )
+    api._window = window
 
     def _on_started() -> None:
         _set_titlebar_theme(title, api.cfg.theme == "dark")

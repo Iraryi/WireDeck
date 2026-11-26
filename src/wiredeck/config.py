@@ -30,6 +30,7 @@ class PresetSettings:
     dns_servers: list[str] = field(default_factory=lambda: ["223.5.5.5", "8.8.8.8"])
     wizard_completed: bool = False
     preferred_client: str = "auto"
+    custom_client_path: str = ""
     custom_notes: str = ""
 
     def to_dict(self) -> dict[str, Any]:
@@ -46,6 +47,7 @@ def default_preset_settings(preset_id: str) -> PresetSettings:
         dns_servers=list(p.default_dns_servers),
         wizard_completed=False,
         preferred_client="auto",
+        custom_client_path="",
         custom_notes="",
     )
 
@@ -80,6 +82,7 @@ class AppConfig:
         wireless_peer_ip: str | None = None,
         dns_servers: list[str] | None = None,
         wizard_completed: bool | None = None,
+        custom_client_path: str | None = None,
     ) -> None:
         self.language = language if language in VALID_LANGUAGES else "zh-CN"
         self.theme = theme if theme in VALID_THEMES else "light"
@@ -114,6 +117,8 @@ class AppConfig:
             active.dns_servers = _valid_dns_list(dns_servers, active.dns_servers)
         if wizard_completed is not None:
             active.wizard_completed = bool(wizard_completed)
+        if custom_client_path is not None and isinstance(custom_client_path, str):
+            active.custom_client_path = custom_client_path.strip()
 
     @property
     def current_preset_settings(self) -> PresetSettings:
@@ -189,6 +194,14 @@ class AppConfig:
         self.current_preset_settings.wizard_completed = bool(value)
 
     @property
+    def custom_client_path(self) -> str:
+        return self.current_preset_settings.custom_client_path
+
+    @custom_client_path.setter
+    def custom_client_path(self, value: str) -> None:
+        self.current_preset_settings.custom_client_path = value.strip() if isinstance(value, str) else ""
+
+    @property
     def subnet_cidr(self) -> str:
         net = ipaddress.IPv4Interface(f"{self.host_ip}/{self.prefix_length}").network
         return str(net)
@@ -219,6 +232,7 @@ class AppConfig:
             "wireless_peer_ip": self.wireless_peer_ip,
             "dns_servers": list(self.dns_servers),
             "wizard_completed": self.wizard_completed,
+            "custom_client_path": self.custom_client_path,
             "subnet_cidr": self.subnet_cidr,
             "subnet_mask": self.subnet_mask,
             # Full isolated per-preset store
@@ -282,6 +296,7 @@ def _normalize_preset_settings(preset_id: str, raw: Any) -> PresetSettings:
         dns_servers=_valid_dns_list(raw.get("dns_servers"), base.dns_servers),
         wizard_completed=bool(raw.get("wizard_completed", base.wizard_completed)),
         preferred_client=str(raw.get("preferred_client", "auto")) if isinstance(raw.get("preferred_client"), str) else "auto",
+        custom_client_path=str(raw.get("custom_client_path", "")).strip() if isinstance(raw.get("custom_client_path"), str) else "",
         custom_notes=str(raw.get("custom_notes", "")) if isinstance(raw.get("custom_notes"), str) else "",
     )
 
@@ -325,6 +340,8 @@ def _normalize_config(raw: dict[str, Any]) -> AppConfig:
         active_ps.dns_servers = _valid_dns_list(raw.get("dns_servers"), active_ps.dns_servers)
     if "wizard_completed" in raw:
         active_ps.wizard_completed = bool(raw.get("wizard_completed"))
+    if "custom_client_path" in raw and isinstance(raw.get("custom_client_path"), str):
+        active_ps.custom_client_path = raw.get("custom_client_path", "").strip()
 
     eth = raw.get("ethernet_interface", "")
     uplink = raw.get("uplink_interface", "")

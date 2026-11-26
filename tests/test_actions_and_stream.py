@@ -513,7 +513,13 @@ def test_fetch_latest_xstreaming_release_handles_github_500_gracefully():
 def test_create_play_shortcut_writes_real_lnk_inside_target_dir(tmp_path: Path):
     from wiredeck.config import AppConfig
     from wiredeck.paths import resolve_app_paths
-    from wiredeck.stream_client import build_play_shortcut_name, create_play_shortcut
+    from wiredeck.stream_client import (
+        build_play_shortcut_name,
+        build_restore_shortcut_name,
+        create_play_shortcut,
+        create_restore_shortcut,
+        launch_stream_client,
+    )
 
     paths = resolve_app_paths(tmp_path / "app", local_appdata=tmp_path / "la")
     cfg = AppConfig(language="zh-CN", active_preset="xbox", active_transport="wired")
@@ -524,3 +530,24 @@ def test_create_play_shortcut_writes_real_lnk_inside_target_dir(tmp_path: Path):
     expected_name = build_play_shortcut_name(cfg)
     lnk_file = desk / expected_name
     assert lnk_file.is_file() and lnk_file.stat().st_size > 100
+
+    res_rest = create_restore_shortcut(paths, cfg, desktop_dir=desk)
+    assert res_rest.ok is True
+    rest_lnk = desk / build_restore_shortcut_name(cfg)
+    assert rest_lnk.is_file() and rest_lnk.stat().st_size > 100
+
+    # Custom client path priority launch test
+    fake_exe = tmp_path / "CustomApps" / "MyXStreaming.exe"
+    fake_exe.parent.mkdir(parents=True, exist_ok=True)
+    fake_exe.write_bytes(b"MZ")
+    launched_cmds: list[list[str]] = []
+    import wiredeck.stream_client as sc_mod
+
+    orig_popen = sc_mod.subprocess.Popen
+    try:
+        sc_mod.subprocess.Popen = lambda cmd, **kw: launched_cmds.append(list(cmd)) or object()  # type: ignore[assignment]
+        lres = launch_stream_client(preset_id="xbox", custom_path=str(fake_exe))
+    finally:
+        sc_mod.subprocess.Popen = orig_popen
+    assert lres.ok is True
+    assert launched_cmds == [[str(fake_exe)]]

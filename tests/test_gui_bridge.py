@@ -179,6 +179,10 @@ def test_i18n_js_has_exact_key_parity_and_concise_home_copy():
         "guide_entry_title",
         "guide_btn_create_shortcut",
         "guide_btn_enter_client",
+        "guide_btn_pick_client",
+        "guide_btn_restore_shortcut",
+        "guide_ping_fail_ap_iso",
+        "guide_quickplay_blocked",
     ):
         assert required_guide_key in base_keys
 
@@ -250,3 +254,60 @@ def test_quick_play_activates_direct_and_launches_or_falls_back(tmp_path: Path):
     api3 = WireDeckApi(paths=paths, snapshot_fn=lambda *a, **kw: tun_snap)
     done3, view3 = _run_quick_play(api3, preset_id="xbox", transport="wired", submode="hotspot", launch_fn=lambda **kw: launched.append("nope") or ActionResult(ok=True, code="OK", message="OK"))
     assert done3 is False and view3 == "home" and launched == []
+
+    # 4. custom_client_path per-preset isolation + L6 recognition
+    from wiredeck.config import load_config, save_config
+    from wiredeck.diagnostics import classify_snapshot
+    from wiredeck.models import Severity
+
+    fake_client = tmp_path / "D_Drive" / "ChiakiPortable.exe"
+    fake_client.parent.mkdir(parents=True, exist_ok=True)
+    fake_client.write_bytes(b"MZ")
+    cfg_custom = load_config(paths)
+    cfg_custom.switch_preset("playstation")
+    cfg_custom.custom_client_path = str(fake_client)
+    save_config(paths, cfg_custom)
+    cfg_reloaded = load_config(paths)
+    assert cfg_reloaded.custom_client_path == str(fake_client)
+    rep_custom = classify_snapshot(
+        {**base_snap, "stream_clients": {"chiaki_path": None, "ps_remote_path": None}},
+        cfg_reloaded,
+    )
+    l6 = next(l for l in rep_custom.layers if l.layer == "L6")
+    assert l6.status == Severity.OK and l6.metrics["custom_client_path"] == str(fake_client)
+    cfg_reloaded.switch_preset("xbox")
+    assert cfg_reloaded.custom_client_path == ""
+
+    # 5. _run_quick_play LAN disconnected guard + _run_quick_restore cleanup
+    from wiredeck.app import _run_quick_restore
+
+    api4 = WireDeckApi(
+        paths=paths,
+        wireless_snapshot_fn=lambda *a, **kw: {
+            "wifi_adapters": [{"name": "WLAN", "status": "Up", "powersave_enabled": []}],
+            "wlan": {"connected": False},
+            "autoconfig_enabled": True,
+            "ipv4_addresses": [],
+            "default_routes": [],
+            "wired_nat_active": False,
+            "hotspot": {"state": "Off"},
+            "hotspot_clients": [],
+            "uwp_exempt_packages": [],
+            "uwp_missing_packages": [],
+            "stream_clients": {"xstreaming_path": "C:\\XStreaming.exe"},
+            "connectivity": {},
+        },
+    )
+    done4, view4 = _run_quick_play(api4, preset_id="xbox", transport="wireless", submode="lan", launch_fn=lambda **kw: ActionResult(ok=True, code="OK", message="OK"))
+    assert done4 is False and view4 == "wireless"
+
+    restore_actions: list[str] = []
+    (paths.runtime_dir / "wifi_backup.json").write_text('{"interface_alias":"WLAN"}\n', encoding="utf-8")
+    api5 = WireDeckApi(
+        paths=paths,
+        snapshot_fn=lambda *a, **kw: base_snap,
+        wireless_snapshot_fn=lambda *a, **kw: {"hotspot": {"state": "On"}},
+    )
+    api5._execute_or_elevate = lambda act, opts: restore_actions.append(act) or ActionResult(ok=True, code="OK", message="OK")  # type: ignore[method-assign]
+    r_ok, _ = _run_quick_restore(api5)
+    assert r_ok is True and restore_actions == ["disable-direct", "disable-hotspot", "restore-wifi"]

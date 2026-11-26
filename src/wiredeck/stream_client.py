@@ -190,8 +190,26 @@ def hash_file_sha256(path: Path) -> str:
     return h.hexdigest().lower()
 
 
-def launch_stream_client(prefer: str = "auto", preset_id: str = "xbox") -> ActionResult:
-    """Launch installed streaming client matching the active device preset."""
+def launch_stream_client(prefer: str = "auto", preset_id: str = "xbox", custom_path: str = "") -> ActionResult:
+    """Launch installed streaming client matching the active device preset (custom_path takes priority)."""
+    custom = custom_path.strip()
+    if custom and Path(custom).is_file():
+        try:
+            subprocess.Popen([custom], cwd=str(Path(custom).parent))
+            return ActionResult(
+                ok=True,
+                code="LAUNCHED",
+                message=f"已启动 {Path(custom).stem}",
+                details={"path": custom, "custom": True},
+            )
+        except Exception as exc:
+            return ActionResult(
+                ok=False,
+                code="LAUNCH_FAILED",
+                message=f"启动 {Path(custom).name} 失败: {exc}",
+                exit_code=1,
+            )
+
     pid = normalize_preset_id(preset_id)
     clients = detect_stream_clients()
 
@@ -298,31 +316,35 @@ def build_play_shortcut_name(cfg: AppConfig) -> str:
     return f"{prefix_map[lang]} - {p_lbl} ({m_lbl}).lnk"
 
 
-def create_play_shortcut(
-    paths: AppPaths,
-    cfg: AppConfig,
+def _resolve_shortcut_target(paths: AppPaths, extra_args: str) -> tuple[str, str, str, str]:
+    bundled_exe = paths.exe_dir / "WireDeck.exe"
+    if bundled_exe.is_file():
+        target_exe = str(bundled_exe)
+        arg_str = extra_args
+        work_dir = str(paths.exe_dir)
+    else:
+        py_path = Path(sys.executable)
+        pyw = py_path.with_name("pythonw.exe")
+        target_exe = str(pyw if pyw.is_file() else py_path)
+        arg_str = f"-m wiredeck.app {extra_args}"
+        work_dir = str(paths.exe_dir)
+    ico_file = get_assets_dir() / "wiredeck.ico"
+    icon_loc = str(ico_file) if ico_file.is_file() else f"{target_exe},0"
+    return target_exe, arg_str, work_dir, icon_loc
+
+
+def _write_desktop_shortcut(
     *,
+    filename: str,
+    target_exe: str,
+    arg_str: str,
+    work_dir: str,
+    icon_loc: str,
+    description: str,
+    language: str,
     desktop_dir: Path | None = None,
     runner: Callable[[str, int], PsResult] = run_powershell,
 ) -> ActionResult:
-    """Create a Desktop .lnk shortcut that enables this mode and launches the stream client."""
-    bundled_exe = paths.exe_dir / "WireDeck.exe"
-    mode_sub = cfg.wireless_submode if cfg.wireless_submode in ("hotspot", "lan") else "hotspot"
-    mode_tr = cfg.active_transport if cfg.active_transport in ("wired", "wireless") else "wired"
-    quick_args = f"--quick-play --preset {normalize_preset_id(cfg.active_preset)} --transport {mode_tr} --submode {mode_sub}"
-
-    if bundled_exe.is_file():
-        target_exe = str(bundled_exe)
-        arg_str = quick_args
-    else:
-        target_exe = sys.executable
-        arg_str = f"-m wiredeck.app {quick_args}"
-
-    work_dir = str(paths.exe_dir if bundled_exe.is_file() else Path(target_exe).parent)
-    ico_file = get_assets_dir() / "wiredeck.ico"
-    icon_loc = str(ico_file) if ico_file.is_file() else f"{target_exe},0"
-
-    filename = build_play_shortcut_name(cfg)
     desktop_expr = _ps_quote(str(desktop_dir)) if desktop_dir is not None else "[Environment]::GetFolderPath('Desktop')"
     ps = f"""
 $ErrorActionPreference = 'Stop'
@@ -335,7 +357,7 @@ $sc.TargetPath = {_ps_quote(target_exe)}
 $sc.Arguments = {_ps_quote(arg_str)}
 $sc.WorkingDirectory = {_ps_quote(work_dir)}
 $sc.IconLocation = {_ps_quote(icon_loc)}
-$sc.Description = {_ps_quote("WireDeck Quick Play")}
+$sc.Description = {_ps_quote(description)}
 $sc.Save()
 Write-Output $lnkPath
 """
@@ -351,7 +373,7 @@ Write-Output $lnkPath
         return ActionResult(
             ok=True,
             code="SHORTCUT_CREATED",
-            message=msg_map.get(cfg.language, msg_map["zh-CN"]),
+            message=msg_map.get(language, msg_map["zh-CN"]),
             exit_code=0,
             details={"path": out_path, "filename": filename},
         )
@@ -360,4 +382,63 @@ Write-Output $lnkPath
         code="SHORTCUT_FAILED",
         message=f"创建桌面快捷方式失败：{res.stderr.strip() or 'WScript.Shell error'}",
         exit_code=1,
+    )
+
+
+def create_play_shortcut(
+    paths: AppPaths,
+    cfg: AppConfig,
+    *,
+    desktop_dir: Path | None = None,
+    runner: Callable[[str, int], PsResult] = run_powershell,
+) -> ActionResult:
+    """Create a Desktop .lnk shortcut that enables this mode and launches the stream client."""
+    mode_sub = cfg.wireless_submode if cfg.wireless_submode in ("hotspot", "lan") else "hotspot"
+    mode_tr = cfg.active_transport if cfg.active_transport in ("wired", "wireless") else "wired"
+    quick_args = f"--quick-play --preset {normalize_preset_id(cfg.active_preset)} --transport {mode_tr} --submode {mode_sub}"
+    target_exe, arg_str, work_dir, icon_loc = _resolve_shortcut_target(paths, quick_args)
+    return _write_desktop_shortcut(
+        filename=build_play_shortcut_name(cfg),
+        target_exe=target_exe,
+        arg_str=arg_str,
+        work_dir=work_dir,
+        icon_loc=icon_loc,
+        description="WireDeck Quick Play",
+        language=cfg.language,
+        desktop_dir=desktop_dir,
+        runner=runner,
+    )
+
+
+def build_restore_shortcut_name(cfg: AppConfig) -> str:
+    """Build a safe localized Windows .lnk filename for 1-click Restore Normal Net/Wi-Fi."""
+    lang = cfg.language if cfg.language in ("zh-CN", "zh-TW", "en", "ja") else "zh-CN"
+    names = {
+        "zh-CN": "WireDeck 恢复日常上网.lnk",
+        "zh-TW": "WireDeck 恢復日常上網.lnk",
+        "en": "WireDeck Restore Normal Net.lnk",
+        "ja": "WireDeck 通常ネットへ戻す.lnk",
+    }
+    return names[lang]
+
+
+def create_restore_shortcut(
+    paths: AppPaths,
+    cfg: AppConfig,
+    *,
+    desktop_dir: Path | None = None,
+    runner: Callable[[str, int], PsResult] = run_powershell,
+) -> ActionResult:
+    """Create a Desktop .lnk shortcut that restores normal Ethernet & Wi-Fi settings."""
+    target_exe, arg_str, work_dir, icon_loc = _resolve_shortcut_target(paths, "--quick-restore")
+    return _write_desktop_shortcut(
+        filename=build_restore_shortcut_name(cfg),
+        target_exe=target_exe,
+        arg_str=arg_str,
+        work_dir=work_dir,
+        icon_loc=icon_loc,
+        description="WireDeck Restore Normal Internet",
+        language=cfg.language,
+        desktop_dir=desktop_dir,
+        runner=runner,
     )

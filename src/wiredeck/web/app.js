@@ -39,6 +39,7 @@
     guideUserPicked: false,
     guidePingResult: null,
     guideShortcutCreatedKey: "",
+    guideRestoreShortcutCreated: false,
   };
 
   function t(key) {
@@ -742,6 +743,24 @@
       const r = await api.launch_stream_client();
       showToast(r.message || "OK");
     };
+    const pickClientFn = async () => {
+      const api = getApi();
+      if (!api || !api.pick_stream_client) return;
+      const r = await api.pick_stream_client();
+      if (r && r.ok) {
+        showToast(r.message || r.filename || "OK");
+        state.wiredStale = true;
+        state.wirelessStale = true;
+        state.guideUserPicked = false;
+        await refreshAll(true);
+      } else if (r && r.message) {
+        showToast(r.message);
+      }
+    };
+    const runPcAction = (act, opts) => {
+      state.guideUserPicked = false;
+      return runAction(act, opts || {});
+    };
 
     if (!isWireless) {
       const l1 = byId.L1 || { status: "idle", faults: [], metrics: {} };
@@ -766,7 +785,7 @@
         s1Status = "fail";
         s1Live = localizeFault(fNicHard).message;
         if (fNicHard.fix_action) {
-          s1Actions.push({ label: t("guide_btn_fix_nic"), primary: true, onClick: () => runAction(fNicHard.fix_action, {}) });
+          s1Actions.push({ label: t("guide_btn_fix_nic"), primary: true, onClick: () => runPcAction(fNicHard.fix_action, {}) });
         }
       } else if (fCable) {
         s1Status = "fail";
@@ -774,11 +793,11 @@
       } else if (fIcs) {
         s1Status = "fail";
         s1Live = t("guide_live_ics");
-        s1Actions.push({ label: t("guide_btn_clear_ics"), primary: true, onClick: () => runAction("clear-ics", {}) });
+        s1Actions.push({ label: t("guide_btn_clear_ics"), primary: true, onClick: () => runPcAction("clear-ics", {}) });
       } else if (fPs) {
         s1Status = "warn";
         s1Live = t("guide_live_cable_ps");
-        s1Actions.push({ label: t("guide_btn_fix_nic"), primary: true, onClick: () => runAction("fix-nic", {}) });
+        s1Actions.push({ label: t("guide_btn_fix_nic"), primary: true, onClick: () => runPcAction("fix-nic", {}) });
       } else if (f100) {
         s1Status = "warn";
         s1Live = t("guide_live_cable_100m");
@@ -814,7 +833,7 @@
         s2Live = t("guide_live_nat_blocked");
         s2Actions.push({ label: t("btn_enable_direct"), primary: true, disabled: true, onClick: () => {} });
       } else {
-        s2Actions.push({ label: t("btn_enable_direct"), primary: true, onClick: () => runAction("enable-direct", {}) });
+        s2Actions.push({ label: t("btn_enable_direct"), primary: true, onClick: () => runPcAction("enable-direct", {}) });
       }
 
       steps.push({
@@ -843,7 +862,7 @@
       } else if (w1.status === "warn" || w4.status === "warn") {
         w1Status = "warn";
         w1Live = t("guide_live_wifi_warn");
-        w1Actions.push({ label: t("w_btn_optimize"), primary: true, onClick: () => runAction("optimize-wifi", {}) });
+        w1Actions.push({ label: t("w_btn_optimize"), primary: true, onClick: () => runPcAction("optimize-wifi", {}) });
       }
       steps.push({
         id: "wifi_opt",
@@ -866,12 +885,12 @@
       if (wiredConflict) {
         hsStatus = "warn";
         hsLive = t("guide_live_hs_conflict");
-        hsActions.push({ label: t("w_btn_start_hotspot"), primary: true, onClick: () => startHotspotWithCheck() });
+        hsActions.push({ label: t("w_btn_start_hotspot"), primary: true, onClick: () => { state.guideUserPicked = false; startHotspotWithCheck(); } });
       } else if (hsOn) {
         hsStatus = "ok";
         hsLive = t("guide_live_hs_on");
       } else {
-        hsActions.push({ label: t("w_btn_start_hotspot"), primary: true, onClick: () => startHotspotWithCheck() });
+        hsActions.push({ label: t("w_btn_start_hotspot"), primary: true, onClick: () => { state.guideUserPicked = false; startHotspotWithCheck(); } });
       }
       steps.push({
         id: "hotspot",
@@ -902,7 +921,7 @@
       } else if (w1.status === "warn" || w2.status === "warn" || w4.status === "warn") {
         lanStatus = "warn";
         lanLive = t("guide_live_lan_24g");
-        lanActions.push({ label: t("w_btn_optimize"), primary: true, onClick: () => runAction("optimize-wifi", {}) });
+        lanActions.push({ label: t("w_btn_optimize"), primary: true, onClick: () => runPcAction("optimize-wifi", {}) });
       }
       steps.push({
         id: "lan_opt",
@@ -929,7 +948,7 @@
       if (uwpMiss) {
         cStatus = "warn";
         cLive = t("guide_live_client_uwp");
-        cActions.push({ label: t("guide_btn_fix_uwp"), primary: true, onClick: () => runAction("fix-uwp", {}) });
+        cActions.push({ label: t("guide_btn_fix_uwp"), primary: true, onClick: () => runPcAction("fix-uwp", {}) });
       } else if (clientMiss) {
         cStatus = "warn";
         cLive = t("guide_live_client_miss");
@@ -942,6 +961,9 @@
         });
       } else if (presetMeta.uses_stream_client) {
         cActions.push({ label: t("wiz_s3_launch"), primary: false, onClick: launchClientFn });
+      }
+      if (presetMeta.uses_stream_client) {
+        cActions.push({ label: t("guide_btn_pick_client"), primary: false, onClick: pickClientFn });
       }
       steps.push({
         id: "client",
@@ -1079,6 +1101,10 @@
 
   function detectGuideClientLabel(byId, presetId, presetMeta) {
     const m = (byId.L6 && byId.L6.metrics) || (byId.W6 && byId.W6.metrics) || {};
+    if (m.custom_client_path) {
+      const stem = String(m.custom_client_path).split(/[\\/]/).pop().replace(/\.exe$/i, "");
+      return { found: true, label: stem || (presetMeta && presetMeta.official_client_name) || "Client" };
+    }
     if (presetId === "xbox") {
       if (m.xstreaming_path) return { found: true, label: "XStreaming" };
       if (m.xbox_app_installed) return { found: true, label: "Xbox" };
@@ -1096,6 +1122,27 @@
       return { found: false, label: "Moonlight" };
     }
     return { found: false, label: (presetMeta && presetMeta.official_client_name) || "" };
+  }
+
+  function explainGuidePingFailure(byId, report, cfg) {
+    const isWireless = Boolean(report && report.transport === "wireless");
+    if (!isWireless) {
+      const l2 = byId.L2 || {};
+      const l4 = byId.L4 || { metrics: {} };
+      if (l2.status === "fail") return { msg: t("guide_ping_fail_cable"), switchHotspot: false };
+      if (!(l4.metrics && l4.metrics.nat_active)) return { msg: t("guide_ping_fail_nat"), switchHotspot: false };
+      return { msg: t("guide_ping_fail_ip"), switchHotspot: false };
+    }
+    const w3 = byId.W3 || { faults: [], metrics: {} };
+    if (state.wirelessSubmode !== "lan") {
+      if ((w3.metrics && w3.metrics.hotspot_state) !== "On") return { msg: t("guide_ping_fail_hs_off"), switchHotspot: false };
+      if (!((w3.metrics && w3.metrics.hotspot_clients) || []).length) return { msg: t("guide_ping_fail_hs_noclient"), switchHotspot: false };
+      return { msg: t("ping_fail"), switchHotspot: false };
+    }
+    if (!(cfg.wireless_peer_ip || "").trim()) return { msg: t("guide_ping_fail_lan_empty"), switchHotspot: false };
+    const apIso = (w3.faults || []).some((f) => f.code === "LAN_AP_ISOLATION_SUSPECTED");
+    if (apIso) return { msg: t("guide_ping_fail_ap_iso"), switchHotspot: true };
+    return { msg: t("ping_fail"), switchHotspot: false };
   }
 
   function renderGuideParams(step, byId, report, cfg) {
@@ -1215,8 +1262,26 @@
             : (typeof ping.rtt_ms === "number" ? ` (${ping.rtt_ms.toFixed(1)} ms)` : "");
           resBox.textContent = `● ${ipTxt} ${t("ping_ok")}${metricTxt}`;
         } else {
+          const diagErr = explainGuidePingFailure(byId, report, cfg);
           resBox.className = "peer-ping-result show fail";
-          resBox.textContent = `✕ ${ping.target_ip || ping.peer_ip || ""} ${t("ping_fail")}`.trim();
+          resBox.textContent = `✕ ${diagErr.msg}`;
+          if (diagErr.switchHotspot) {
+            const swBtn = document.createElement("button");
+            swBtn.type = "button";
+            swBtn.className = "btn-link-subtle";
+            swBtn.style.marginLeft = "8px";
+            swBtn.textContent = t("guide_switch_to_hotspot");
+            swBtn.addEventListener("click", async () => {
+              const api = getApi();
+              state.transport = "wireless";
+              state.wirelessSubmode = "hotspot";
+              state.guideUserPicked = false;
+              if (api && api.set_transport) await api.set_transport("wireless");
+              if (api && api.set_wireless_submode) await api.set_wireless_submode("hotspot");
+              await refreshAll(true);
+            });
+            resBox.appendChild(swBtn);
+          }
         }
         host.appendChild(resBox);
       }
@@ -1273,8 +1338,26 @@
           const api = getApi();
           if (!api) return;
           if (clientInfo.found) {
-            const r = await api.launch_stream_client();
-            showToast(r.message || "OK");
+            if (api.quick_play_now) {
+              enterBtn.disabled = true;
+              try {
+                const r = await api.quick_play_now();
+                if (r && r.ok) {
+                  showToast(r.message || `${t("wiz_s3_launch")} ${clientInfo.label}`);
+                } else {
+                  showToast((r && r.message) || t("guide_quickplay_blocked"));
+                  state.wiredStale = true;
+                  state.wirelessStale = true;
+                  state.guideUserPicked = false;
+                }
+                await refreshAll(true);
+              } finally {
+                enterBtn.disabled = false;
+              }
+            } else {
+              const r = await api.launch_stream_client();
+              showToast(r.message || "OK");
+            }
           } else {
             showToast(t("toast_working"));
             const r = await api.download_xstreaming();
@@ -1289,10 +1372,29 @@
       host.appendChild(entryCard);
 
       if (step.dailyTip) {
+        const tipRow = document.createElement("div");
+        tipRow.className = "guide-tip-row";
         const tip = document.createElement("div");
         tip.className = "guide-tip";
         tip.textContent = step.dailyTip;
-        host.appendChild(tip);
+        tipRow.appendChild(tip);
+
+        const rsBtn = document.createElement("button");
+        rsBtn.type = "button";
+        rsBtn.className = "btn-link-subtle";
+        rsBtn.textContent = t(state.guideRestoreShortcutCreated ? "guide_btn_restore_done" : "guide_btn_restore_shortcut");
+        rsBtn.addEventListener("click", async () => {
+          const api = getApi();
+          if (!api || !api.create_restore_shortcut) return;
+          const r = await api.create_restore_shortcut();
+          showToast(r.message || (r.ok ? "OK" : r.code));
+          if (r && r.ok) {
+            state.guideRestoreShortcutCreated = true;
+            rsBtn.textContent = t("guide_btn_restore_done");
+          }
+        });
+        tipRow.appendChild(rsBtn);
+        host.appendChild(tipRow);
       }
     }
   }
@@ -1316,7 +1418,10 @@
     if (bH) bH.classList.toggle("active", isWireless && state.wirelessSubmode !== "lan");
     if (bL) bL.classList.toggle("active", isWireless && state.wirelessSubmode === "lan");
 
-    const presetName = t(`preset_${getActivePresetId(report)}_name`);
+    const presetSel = document.getElementById("guidePresetSelect");
+    const activePid = getActivePresetId(report);
+    if (presetSel) presetSel.value = activePid;
+    const presetName = t(`preset_${activePid}_name`);
     const subEl = document.getElementById("guideSub");
     if (subEl) subEl.textContent = `${presetName} · ${t("wizard_sub")}`;
 
@@ -1969,6 +2074,18 @@
     document.getElementById("btnGuideWired").addEventListener("click", () => switchGuideMode("wired", null));
     document.getElementById("btnGuideHotspot").addEventListener("click", () => switchGuideMode("wireless", "hotspot"));
     document.getElementById("btnGuideLan").addEventListener("click", () => switchGuideMode("wireless", "lan"));
+    const guidePresetSel = document.getElementById("guidePresetSelect");
+    if (guidePresetSel) {
+      guidePresetSel.addEventListener("change", async (e) => {
+        const api = getApi();
+        if (!api || !api.switch_preset) return;
+        state.wiredStale = true;
+        state.wirelessStale = true;
+        state.guideUserPicked = false;
+        const res = await api.switch_preset(e.target.value);
+        if (res && res.ok) await refreshAll(true);
+      });
+    }
     document.getElementById("btnGuidePrev").addEventListener("click", () => {
       if (state.guideStepIdx > 0) {
         state.guideUserPicked = true;

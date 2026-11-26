@@ -5,6 +5,7 @@ from __future__ import annotations
 import ipaddress
 import re
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Callable
 
 from wiredeck.config import AppConfig
@@ -497,8 +498,11 @@ def classify_wireless_snapshot(
 
     # ---------------- W6: Preset-Specific Readiness ----------------
     w6_faults: list[FaultItem] = []
+    custom_path = cfg.custom_client_path.strip()
+    custom_ok = bool(custom_path and Path(custom_path).is_file())
     w6_metrics: dict[str, Any] = {
         "preset": preset.id,
+        "custom_client_path": custom_path if custom_ok else None,
         "xstreaming_path": stream_clients.get("xstreaming_path"),
         "xbox_app_installed": bool(stream_clients.get("xbox_app_installed", False)),
         "chiaki_path": stream_clients.get("chiaki_path"),
@@ -527,7 +531,7 @@ def classify_wireless_snapshot(
                 )
             )
         if preset.uses_stream_client and preset.client_fault_code:
-            has_client = any(bool(stream_clients.get(k)) for k in preset.client_keys)
+            has_client = custom_ok or any(bool(stream_clients.get(k)) for k in preset.client_keys)
             if not has_client:
                 client_copy = {
                     "STREAM_CLIENT_MISSING": ("未装串流客户端", "建议下载官方 XStreaming 或安装 Xbox 应用"),

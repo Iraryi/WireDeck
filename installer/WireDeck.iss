@@ -45,6 +45,7 @@ UninstallDisplayName={#AppName} v{#AppVersion}
 Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
+WizardSizePercent=115
 ShowLanguageDialog=no
 UsePreviousLanguage=yes
 ChangesEnvironment=yes
@@ -58,8 +59,8 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 [CustomMessages]
 zh_CN.TaskDesktop=创建桌面快捷方式
 english.TaskDesktop=Create a desktop shortcut
-zh_CN.TaskPath=将 wiredeck-cli.exe 加入当前用户 PATH（推荐，便于 DSH/终端调用）
-english.TaskPath=Add wiredeck-cli.exe to current user PATH (recommended for CLI / DSH)
+zh_CN.TaskPath=将 wiredeck-cli.exe 加入用户 PATH（推荐，供终端与 AI 调用）
+english.TaskPath=Add wiredeck-cli.exe to user PATH (recommended for CLI / AI)
 zh_CN.TaskPortable=便携数据模式（配置与扩展保存在安装目录 data\ 下）
 english.TaskPortable=Portable data mode (store config and extensions under install\data\)
 zh_CN.LaunchApp=立即启动 WireDeck
@@ -139,6 +140,13 @@ begin
     end;
   end;
   RegWriteExpandStringValue(HKCU, EnvKey, 'Path', NewPath);
+end;
+
+procedure InitializeWizard();
+begin
+  { Prevent left/vertical checkbox clipping on high-DPI Windows with Microsoft YaHei UI }
+  WizardForm.TasksList.Offset := ScaleX(8);
+  WizardForm.TasksList.MinItemHeight := ScaleY(24);
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);

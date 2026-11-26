@@ -60,6 +60,17 @@ def test_wiredeck_api_state_settings_export_and_bridge_toggle(tmp_path: Path):
     assert off_res["ok"] is True
     assert off_res["running"] is False
 
+    # Sample extension creation for first-time AI onboarding
+    sample = api.create_sample_extension()
+    assert sample["ok"] is True
+    assert sample["created"] is True
+    listed = api.list_extensions()
+    assert any(e["valid"] and e["manifest"]["id"] == "sample-dns-check" for e in listed)
+    # Second click is idempotent
+    sample2 = api.create_sample_extension()
+    assert sample2["ok"] is True
+    assert sample2["created"] is False
+
 
 def test_preview_states_are_deterministic_and_zero_pii():
     for mode in ("ready", "breakpoint", "wizard", "ai"):

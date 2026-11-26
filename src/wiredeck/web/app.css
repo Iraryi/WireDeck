@@ -623,6 +623,92 @@ select:focus, input:focus {
   font-size: 12px;
 }
 
+/* AI First-Time 3-Step Guide & Native Expander */
+.ai-steps {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+  padding: 12px 14px 10px;
+  border-bottom: 1px solid var(--divider);
+}
+.ai-step {
+  background: var(--surface-subtle);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 8px 10px;
+}
+.ai-step-t {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+.ai-step-d {
+  font-size: 12px;
+  color: var(--text-sec);
+  margin-top: 2px;
+}
+
+.ai-cta-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 14px;
+}
+
+.ai-prompt-box {
+  margin: 0 14px 12px;
+  padding: 9px 11px;
+  background: var(--code-bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 12px;
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 112px;
+  overflow-y: auto;
+  user-select: text;
+}
+
+.sec-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 2px 2px -4px;
+}
+
+details.adv-box {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+details.adv-box > summary {
+  list-style: none;
+  cursor: pointer;
+  padding: 10px 14px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-sec);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+details.adv-box > summary::-webkit-details-marker { display: none; }
+details.adv-box > summary::after {
+  content: "▸";
+  font-size: 12px;
+  color: var(--text-muted);
+}
+details.adv-box[open] > summary {
+  border-bottom: 1px solid var(--divider);
+  color: var(--text);
+}
+details.adv-box[open] > summary::after {
+  content: "▾";
+}
+
 /* Classic Desktop Bottom Status Bar */
 .statusbar {
   height: 28px;

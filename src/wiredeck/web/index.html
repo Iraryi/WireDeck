@@ -161,31 +161,55 @@
           <div class="page-head">
             <div>
               <div class="page-title" data-i18n="ai_title">AI / DSH 协作接口</div>
-              <div class="page-sub" data-i18n="ai_sub">导出脱敏现场，或往 extensions/ 放入脚本免编译热加载</div>
+              <div class="page-sub" data-i18n="ai_sub">遇到程序未覆盖的网络问题时，3 步交给 DSH 等 AI 直接排查并热写修复</div>
             </div>
-            <div class="row-actions">
-              <button class="btn btn-sm btn-primary" id="btnAiExportCopy" type="button" data-i18n="ai_copy_btn">导出脱敏包并复制</button>
-              <button class="btn btn-sm" id="btnOpenExtFolder" type="button" data-i18n="ai_open_ext">打开扩展目录</button>
-            </div>
+            <button class="btn btn-sm" id="btnAiRefresh" type="button" data-i18n="btn_refresh">刷新</button>
           </div>
 
           <div class="group-box">
-            <div class="list-row">
-              <div class="list-row-col">
-                <div class="row-head">CLI 入口（同步 JSON · 退出码 0/1/2/3）</div>
-                <div class="row-desc mono">wiredeck-cli.exe diagnose --json &nbsp;|&nbsp; apply &lt;action&gt; --json &nbsp;|&nbsp; ext validate &lt;dir&gt;</div>
+            <div class="ai-steps">
+              <div class="ai-step">
+                <div class="ai-step-t" data-i18n="ai_step1_t">1. 复制现场</div>
+                <div class="ai-step-d" data-i18n="ai_step1_d">自动脱敏打包，并复制交接词</div>
+              </div>
+              <div class="ai-step">
+                <div class="ai-step-t" data-i18n="ai_step2_t">2. 粘贴给 AI</div>
+                <div class="ai-step-d" data-i18n="ai_step2_d">发给 DSH 等 AI 查根因或写插件</div>
+              </div>
+              <div class="ai-step">
+                <div class="ai-step-t" data-i18n="ai_step3_t">3. 点刷新生效</div>
+                <div class="ai-step-d" data-i18n="ai_step3_d">AI 写的修复自动出现在主控台</div>
               </div>
             </div>
+            <div class="ai-cta-bar">
+              <div class="row-actions">
+                <button class="btn btn-primary" id="btnAiExportCopy" type="button" data-i18n="ai_copy_btn">1. 复制现场发给 AI</button>
+                <button class="btn" id="btnAiPreviewPrompt" type="button" data-i18n="ai_preview_btn">查看交接内容</button>
+              </div>
+              <button class="btn btn-sm" id="btnOpenExtFolder" type="button" data-i18n="ai_open_ext">打开扩展目录</button>
+            </div>
+            <div id="aiPromptPreview" class="ai-prompt-box mono" style="display:none;"></div>
           </div>
 
-          <div class="sec-label" data-i18n="ai_ext_heading">已加载扩展 (extensions/)</div>
+          <div class="sec-row">
+            <span class="sec-label" style="margin:0;" data-i18n="ai_ext_heading">已加载的 AI 扩展</span>
+            <button class="btn btn-sm" id="btnCreateSampleExt" type="button" data-i18n="ai_create_sample">创建示例扩展</button>
+          </div>
           <div class="group-box" id="extList"></div>
 
-          <div class="group-box">
+          <details class="adv-box" id="aiAdvancedBox">
+            <summary data-i18n="ai_adv_summary">高级接入（CLI 命令行与本地 HTTP Bridge）</summary>
+            <div class="list-row">
+              <div class="list-row-col">
+                <div class="row-head" data-i18n="ai_cli_title">无头 CLI（供终端 / DSH 直接调用）</div>
+                <div class="row-desc mono">wiredeck-cli.exe diagnose --json &nbsp;|&nbsp; apply &lt;action&gt; --json</div>
+              </div>
+              <button class="btn btn-sm" id="btnCopyCliCmd" type="button" data-i18n="ai_copy_cli">复制诊断命令</button>
+            </div>
             <div class="list-row" style="border-bottom:none;">
               <div class="list-row-col">
                 <div class="row-head" data-i18n="ai_bridge_heading">本地 HTTP Bridge（默认关闭）</div>
-                <div class="row-desc" data-i18n="ai_bridge_desc">仅绑定 127.0.0.1 随机端口与 32 字节随机 Token，写操作需界面确认。</div>
+                <div class="row-desc" data-i18n="ai_bridge_desc">仅监听 127.0.0.1 随机端口与随机 Token，特权写操作仍需界面确认。</div>
               </div>
               <label class="win-switch">
                 <input type="checkbox" id="bridgeToggle" />
@@ -199,7 +223,7 @@
                 <button class="btn btn-sm" id="btnCopyToken" type="button" data-i18n="ai_bridge_copy">复制 Token</button>
               </div>
             </div>
-          </div>
+          </details>
         </section>
 
         <!-- VIEW 4: SETTINGS (Native Page, no cramped modal) -->

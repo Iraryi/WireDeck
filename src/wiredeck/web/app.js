@@ -471,13 +471,20 @@
     return false;
   }
 
-  async function exportAndCopyAi() {
+  async function exportAndCopyAi(showPreview) {
     const api = getApi();
     if (!api) return;
     const res = await api.export_for_ai();
     if (res.ok) {
       await copyText(res.prompt);
-      showToast(t("toast_copied"));
+      const box = document.getElementById("aiPromptPreview");
+      if (box) {
+        box.textContent = res.prompt;
+        if (showPreview) {
+          box.style.display = "block";
+        }
+      }
+      showToast(t("ai_copied_hint"));
     } else {
       showToast(res.message || "Export failed");
     }
@@ -490,11 +497,38 @@
 
     document.getElementById("btnRefresh").addEventListener("click", () => refreshAll(false));
     document.getElementById("btnWizRefresh").addEventListener("click", () => refreshAll(false));
+    document.getElementById("btnAiRefresh").addEventListener("click", () => refreshAll(false));
 
     document.getElementById("btnEnableDirect").addEventListener("click", () => runAction("enable-direct", {}));
     document.getElementById("btnDisableDirect").addEventListener("click", () => runAction("disable-direct", {}));
-    document.getElementById("btnCopyAiQuick").addEventListener("click", exportAndCopyAi);
-    document.getElementById("btnAiExportCopy").addEventListener("click", exportAndCopyAi);
+    document.getElementById("btnCopyAiQuick").addEventListener("click", () => exportAndCopyAi(false));
+    document.getElementById("btnAiExportCopy").addEventListener("click", () => exportAndCopyAi(true));
+    document.getElementById("btnAiPreviewPrompt").addEventListener("click", async () => {
+      const box = document.getElementById("aiPromptPreview");
+      if (box.style.display === "block") {
+        box.style.display = "none";
+        return;
+      }
+      if (!box.textContent.trim()) {
+        const api = getApi();
+        if (api) {
+          const res = await api.export_for_ai();
+          if (res.ok) box.textContent = res.prompt;
+        }
+      }
+      box.style.display = "block";
+    });
+    document.getElementById("btnCreateSampleExt").addEventListener("click", async () => {
+      const api = getApi();
+      if (!api) return;
+      const res = await api.create_sample_extension();
+      showToast(res.message || "OK");
+      await refreshAll(true);
+    });
+    document.getElementById("btnCopyCliCmd").addEventListener("click", async () => {
+      await copyText("wiredeck-cli.exe diagnose --json");
+      showToast(t("toast_copied"));
+    });
 
     const launchFn = async () => {
       const api = getApi();

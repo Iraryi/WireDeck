@@ -309,6 +309,50 @@ class WireDeckApi:
             return {"status": "fail", "code": "EXT_NOT_FOUND", "message": f"未找到扩展 {ext_id}"}
         return run_extension(m, mode="check").to_dict()
 
+    def create_sample_extension(self) -> dict[str, Any]:
+        """Create a harmless read-only example extension so first-time users can see hot-reload work."""
+        ext_dir = self.paths.extensions_dir / "sample-dns-check"
+        manifest_path = ext_dir / "ext.json"
+        script_path = ext_dir / "check.ps1"
+        if manifest_path.is_file() and script_path.is_file():
+            return {
+                "ok": True,
+                "created": False,
+                "ext_id": "sample-dns-check",
+                "message": "示例扩展已存在，可直接点「检测」体验",
+            }
+        ext_dir.mkdir(parents=True, exist_ok=True)
+        manifest = {
+            "schema": "wiredeck-ext/v1",
+            "id": "sample-dns-check",
+            "name": "示例：公共 DNS 连通自检",
+            "author": "WireDeck",
+            "enabled": True,
+            "auto_check": False,
+            "layer": "L5",
+            "overrides_faults": [],
+            "requires_admin": False,
+            "timeout_sec": 5,
+            "check_script": "check.ps1",
+            "description": "只读示例扩展：检测 223.5.5.5 连通性，演示热加载插件写法（可随时在扩展目录删除）",
+        }
+        manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        ps_code = (
+            "$ok = Test-Connection -ComputerName 223.5.5.5 -Count 1 -Quiet -ErrorAction SilentlyContinue\r\n"
+            "if ($ok) {\r\n"
+            "  Write-Output '{\"status\":\"ok\",\"code\":\"SAMPLE_DNS_OK\",\"title\":\"公共 DNS 正常\",\"message\":\"223.5.5.5 连通正常（示例扩展运行成功）\"}'\r\n"
+            "} else {\r\n"
+            "  Write-Output '{\"status\":\"warn\",\"code\":\"SAMPLE_DNS_TIMEOUT\",\"title\":\"公共 DNS 超时\",\"message\":\"无法 ping 通 223.5.5.5，可检查上游网络\"}'\r\n"
+            "}\r\n"
+        )
+        script_path.write_bytes(b"\xef\xbb\xbf" + ps_code.encode("utf-8"))
+        return {
+            "ok": True,
+            "created": True,
+            "ext_id": "sample-dns-check",
+            "message": "已创建只读示例扩展，点击下方「检测」即可体验",
+        }
+
     def toggle_bridge(self, enabled: bool) -> dict[str, Any]:
         if enabled:
             if self._bridge is None:

@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from wiredeck.config import AppConfig
+from wiredeck.presets import get_preset
 from wiredeck.ps_runner import CREATE_NO_WINDOW, PsResult, is_admin, run_powershell
 from wiredeck.version import FW_RULE_DIRECT, FW_RULE_NAT
 
@@ -442,31 +443,84 @@ def _http_probe(url: str, timeout: float = 2.0) -> tuple[bool, int]:
         return False, 0
 
 
+def _find_first_file(candidates: list[Path]) -> str | None:
+    for p in candidates:
+        try:
+            if p.is_file():
+                return str(p)
+        except OSError:
+            continue
+    return None
+
+
+def detect_local_ps_clients() -> dict[str, str | None]:
+    """Detect Chiaki-ng / Chiaki and Sony PS Remote Play installations."""
+    local_app = os.environ.get("LOCALAPPDATA", "")
+    pf = os.environ.get("ProgramFiles", r"C:\Program Files")
+    pf86 = os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")
+    chiaki = _find_first_file([
+        Path(pf) / "chiaki-ng" / "chiaki.exe",
+        Path(pf) / "Chiaki-ng" / "chiaki.exe",
+        Path(pf) / "chiaki" / "chiaki.exe",
+        Path(local_app) / "Programs" / "chiaki-ng" / "chiaki.exe",
+        Path(local_app) / "chiaki-ng" / "chiaki.exe",
+    ])
+    ps_remote = _find_first_file([
+        Path(pf86) / "Sony" / "PS Remote Play" / "RemotePlay.exe",
+        Path(pf) / "Sony" / "PS Remote Play" / "RemotePlay.exe",
+    ])
+    return {"chiaki_path": chiaki, "ps_remote_path": ps_remote}
+
+
+def detect_local_handheld_clients() -> dict[str, str | None]:
+    """Detect Moonlight, Sunshine, and Steam installations for handheld streaming."""
+    local_app = os.environ.get("LOCALAPPDATA", "")
+    pf = os.environ.get("ProgramFiles", r"C:\Program Files")
+    pf86 = os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")
+    moonlight = _find_first_file([
+        Path(pf) / "Moonlight Game Streaming" / "Moonlight.exe",
+        Path(pf86) / "Moonlight Game Streaming" / "Moonlight.exe",
+        Path(local_app) / "Programs" / "Moonlight" / "Moonlight.exe",
+    ])
+    sunshine = _find_first_file([
+        Path(pf) / "Sunshine" / "sunshine.exe",
+        Path(pf86) / "Sunshine" / "sunshine.exe",
+    ])
+    steam = _find_first_file([
+        Path(pf86) / "Steam" / "steam.exe",
+        Path(pf) / "Steam" / "steam.exe",
+    ])
+    return {"moonlight_path": moonlight, "sunshine_path": sunshine, "steam_path": steam}
+
+
 def probe_connectivity(cfg: AppConfig) -> dict[str, Any]:
-    """Run bounded concurrent peer ping, host internet, and optional Xbox Live probes."""
+    """Run bounded concurrent peer ping, host internet, and preset service endpoint probes."""
+    preset = get_preset(cfg.active_preset)
     with ThreadPoolExecutor(max_workers=3) as pool:
         f_peer = pool.submit(_ping_peer, cfg.peer_ip, 600)
         f_inet = pool.submit(_http_probe, "http://www.msftconnecttest.com/connecttest.txt", 2.0)
-        f_xbox = (
-            pool.submit(_http_probe, "https://user.auth.xboxlive.com/user/authenticate", 2.5)
-            if cfg.console_profile == "xbox"
+        f_svc = (
+            pool.submit(_http_probe, preset.service_endpoint_url, 2.5)
+            if preset.service_endpoint_url
             else None
         )
         peer_ok, peer_rtt = f_peer.result()
         inet_ok, _ = f_inet.result()
         if not inet_ok:
             inet_ok, _ = _http_probe("https://login.microsoftonline.com/", 2.0)
-        if f_xbox is not None:
-            xbox_ok, xbox_status = f_xbox.result()
+        if f_svc is not None:
+            svc_ok, svc_status = f_svc.result()
         else:
-            xbox_ok, xbox_status = None, None
+            svc_ok, svc_status = None, None
 
     return {
         "peer_reachable": peer_ok,
         "peer_rtt_ms": peer_rtt,
         "host_internet_ok": inet_ok,
-        "xbox_live_ok": xbox_ok,
-        "xbox_live_status": xbox_status,
+        "xbox_live_ok": svc_ok if preset.id == "xbox" else None,
+        "xbox_live_status": svc_status if preset.id == "xbox" else None,
+        "service_endpoint_ok": svc_ok,
+        "service_endpoint_status": svc_status,
     }
 
 
@@ -537,6 +591,8 @@ def collect_system_snapshot(
         "stream_clients": {
             "xstreaming_path": detect_local_xstreaming_path(),
             "xbox_app_installed": bool(parsed.get("xbox_app_installed", False)),
+            **detect_local_ps_clients(),
+            **detect_local_handheld_clients(),
         },
         "connectivity": connectivity,
     }

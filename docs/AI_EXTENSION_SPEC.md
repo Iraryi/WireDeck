@@ -11,14 +11,18 @@ Packaged alongside `WireDeck.exe` (subsystem `WINDOWS_CUI`, UTF-8 stdout, option
 ### Commands
 
 ```powershell
-wiredeck-cli.exe diagnose [--json] [--console xbox|ps5|generic] [--no-extensions] [--no-network]
+wiredeck-cli.exe diagnose [--json] [--console xbox|playstation|switch|handheld|other] [--no-extensions] [--no-network]
 wiredeck-cli.exe status [--json] [--check-nat-active]
 wiredeck-cli.exe apply <action> [--id <ext_id>] [--force] [--elevate] [--json]
 wiredeck-cli.exe export-bundle [--out <path>] [--json]
 wiredeck-cli.exe ext list [--json]
 wiredeck-cli.exe ext validate <ext_dir_or_id> [--json]
 wiredeck-cli.exe ext run <ext_id> [--mode check|fix] [--elevate] [--json]
+wiredeck-cli.exe toolkit list [--preset xbox|playstation|switch|handheld|other] [--all] [--json]
+wiredeck-cli.exe toolkit run <tool_id> [--json]
 ```
+
+> Legacy aliases `ps5 -> playstation` and `generic -> other` are accepted by `--console` and `--preset`.
 
 ### Supported `apply` Actions
 
@@ -109,13 +113,42 @@ When enabled manually from **AI 接口 (AI Port)** in the GUI:
   - `GET /api/v1/health`
   - `GET /api/v1/diagnose`
   - `GET /api/v1/extensions`
+  - `GET /api/v1/toolkits` — lists bundled read-only toolkits (optional `?all=1` or `?preset=<id>`)
+  - `POST /api/v1/toolkits/run` — body `{"tool_id": "<scope/name>"}`, executes read-only bundled probe immediately without elevating
   - `POST /api/v1/apply` — returns `202 Accepted` + `{"job_id": "...", "status": "pending_approval"}` and prompts the human user in-app before any privileged write runs.
   - `GET /api/v1/jobs/<job_id>` — poll final status (`pending_approval` | `running` | `completed` | `rejected` | `failed`).
 - Turning the toggle OFF or closing WireDeck immediately stops the server and removes `runtime/bridge.json`.
 
 ---
 
-## 4. Sanitized Diagnostic Export
+## 4. Bundled Universal & Per-Preset Toolkits (`wiredeck-toolkits/v1`)
+
+WireDeck ships **16 read-only PowerShell toolkits** (universal host probes under `common/` plus tailored scripts under each preset) callable from the GUI **AI 接口** panel, HTTP Bridge `/api/v1/toolkits`, and `wiredeck-cli.exe toolkit run <tool_id> --json`.
+
+| Tool ID | Scope | Purpose |
+| :--- | :--- | :--- |
+| `common/probe-route-table` | Universal | Dump IPv4 default routes, metrics, and VPN TUN interfaces |
+| `common/probe-nic-pcie-tree` | Universal | Inspect wired NICs, driver versions, link speed & power-save flags |
+| `common/probe-udp-ports` | Universal | Check listeners/services holding UDP 53/67 and streaming ports |
+| `common/probe-mtu-path` | Universal | DF-ping upstream path MTU probe |
+| `common/probe-winnat-firewall` | Universal | Inspect `NetNat` entries, IPv4 forwarding, and WireDeck firewall rules |
+| `common/bench-peer-jitter` | Universal | 8-packet direct RTT & jitter check to current preset `peer_ip` |
+| `xbox/check-xbox-endpoints` | `xbox` | DNS + HTTPS latency for Xbox Live / XSTS / Store endpoints |
+| `xbox/audit-uwp-loopback` | `xbox` | Verify AppContainer loopback exemptions for Store / Xbox packages |
+| `xbox/check-xbox-ports` | `xbox` | Inspect local listeners on Xbox ports (UDP 3074 / 5050 / 9002) |
+| `playstation/check-psn-endpoints` | `playstation` | Probe PSN auth, account, and PlayStation Store HTTPS reachability |
+| `playstation/check-ps-remote-ports` | `playstation` | Check PS Remote Play / Chiaki-ng ports (9295-9297 / 9302 / 987) |
+| `switch/check-nintendo-endpoints` | `switch` | Verify `ctest.cdn.nintendo.net` and `conntest.nintendowifi.net` |
+| `switch/bench-switch-dns` | `switch` | Compare DNS lookup latency across 223.5.5.5 / 119.29.29.29 / 8.8.8.8 / 168.126.63.1 |
+| `handheld/check-stream-host-ports` | `handheld` | Inspect Sunshine/Moonlight (47984-48000) and Steam stream listeners |
+| `handheld/emit-linux-nmcli-script` | `handheld` | Generate ready-to-paste `nmcli` & policy-route commands for SteamOS/Linux |
+| `other/emit-peer-config-snippets` | `other` | Generate Linux, macOS, and Windows peer static IP commands for the active subnet |
+
+Each script receives `WIREDECK_PRESET`, `WIREDECK_HOST_IP`, `WIREDECK_PEER_IP`, `WIREDECK_PREFIX_LENGTH`, `WIREDECK_SUBNET_MASK`, `WIREDECK_SUBNET_CIDR`, and `WIREDECK_DNS_SERVERS`.
+
+---
+
+## 5. Sanitized Diagnostic Export
 
 `wiredeck-cli.exe export-bundle` (or **复制现场给 AI** in the GUI) writes `<data_dir>\exports\diagnostic_latest.json`:
 - Redacts Windows profile usernames (`C:\Users\<USER>`) and strips keys matching `token`, `password`, `secret`, `api_key`, `credential`, `cookie`, and `Bearer` headers.

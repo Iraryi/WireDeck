@@ -1,17 +1,30 @@
 (function () {
   "use strict";
 
+  const PRESET_ORDER = ["xbox", "playstation", "switch", "handheld", "other"];
+  const DEFAULT_WIZARD_STEPS = {
+    xbox: ["nic", "uwp", "client", "peer"],
+    playstation: ["nic", "client", "peer"],
+    switch: ["nic", "peer"],
+    handheld: ["nic", "client", "peer"],
+    other: ["nic", "peer"],
+  };
+
   const state = {
     lang: "zh-CN",
     theme: "light",
     appState: null,
     report: null,
     extensions: [],
+    toolkits: [],
     bridgeToken: "",
     activeBridgeJob: null,
     confirmCallback: null,
     pollTimer: null,
     busy: false,
+    onbSelectedLang: "zh-CN",
+    onbSelectedPreset: "xbox",
+    onboardingDismissed: false,
   };
 
   function t(key) {
@@ -25,6 +38,11 @@
       const k = el.getAttribute("data-i18n");
       if (k) el.textContent = t(k);
     });
+    const refreshBtn = document.getElementById("btnRefresh");
+    if (refreshBtn) refreshBtn.title = t("btn_refresh");
+    if (document.getElementById("onboardingModal").classList.contains("open")) {
+      renderOnboardingModal();
+    }
   }
 
   function applyTheme(theme) {
@@ -73,48 +91,131 @@
     return window.pywebview && window.pywebview.api;
   }
 
-  const EN_FAULTS = {
-    NIC_NOT_FOUND: ["Wired NIC Not Found", "Check Ethernet hardware or plug in a USB wired adapter"],
-    NIC_PCIE_PARENT_DISABLED: ["PCIe Port Disabled", "Parent PCIe root port is disabled; click Fix Now to wake it"],
-    NIC_DISABLED: ["Wired NIC Disabled", "Wired adapter is disabled; click Fix Now to enable it"],
-    NIC_POWERSAVE_ENABLED: ["NIC Power-Save On", "EEE/Green Ethernet can cause stream stutter; click Fix Now"],
-    CABLE_UNPLUGGED: ["Cable Unplugged", "Plug Ethernet cable firmly into laptop and powered-on console"],
-    LINK_DEGRADED_100M: ["100 Mbps Link", "Negotiated 100 Mbps; use a Cat5e/Cat6 Gigabit cable"],
-    NIC_HW_ERRORS: ["Cable Packet Errors", "High hardware packet errors; reseat or replace Ethernet cable"],
-    VPN_TUN_ACTIVE: ["VPN Taking Over Route", "Disconnect your VPN first, then click Enable Direct"],
-    ICS_ACTIVE: ["Windows ICS Active", "Windows ICS conflicts with TUN/WinNAT; click Fix Now to clear"],
-    PORT_53_67_OCCUPIED: ["UDP 53/67 In Use", "ICS/DHCP port conflict; clear ICS or stop conflicting service"],
-    PORT_53_NON_ICS_WARNING: ["Local DNS on UDP 53", "Third-party local DNS uses port 53 (does not block Direct)"],
-    FOREIGN_NETNAT_EXISTS: ["Other NetNat Found", "Another NetNat exists; confirm clearing before enabling Direct"],
-    ETH_IP_MISSING: ["Wired Static IP Missing", "Static host IP missing; click Fix Now to reapply"],
-    ETH_HAS_UNEXPECTED_GATEWAY: ["Unexpected Gateway", "Wired NIC should not hold a default gateway; reapply Direct"],
-    FORWARDING_DISABLED: ["IP Forwarding Off", "IPv4 forwarding is disabled; click Fix Now to reapply"],
-    FW_RULE_MISSING: ["Firewall Rule Missing", "WireDeck subnet firewall rule missing; click Fix Now"],
-    PEER_UNREACHABLE: ["Console Unreachable", "Power on console and apply the static IP in First Setup"],
-    HOST_INTERNET_DOWN: ["No Internet on Laptop", "Check your Wi-Fi or hotspot internet connection"],
-    XBOX_LIVE_UNREACHABLE: ["Xbox Live Unreachable", "Xbox auth endpoint did not respond; retry or check network"],
-    UWP_LOOPBACK_MISSING: ["UWP Loopback Blocked", "Exempt Store & Xbox apps so proxies do not block login"],
-    STREAM_CLIENT_MISSING: ["No Stream Client", "Download verified XStreaming or install Xbox App in First Setup"],
+  function getActivePresetId(report) {
+    if (state.appState && state.appState.active_preset && state.appState.active_preset.id) {
+      return state.appState.active_preset.id;
+    }
+    if (report && report.console_profile) return report.console_profile;
+    return "xbox";
+  }
+
+  function getActivePresetMeta(report) {
+    const id = getActivePresetId(report);
+    if (state.appState && state.appState.active_preset && state.appState.active_preset.id === id) {
+      return state.appState.active_preset;
+    }
+    return {
+      id,
+      wizard_steps: DEFAULT_WIZARD_STEPS[id] || DEFAULT_WIZARD_STEPS.other,
+      uses_uwp_loopback: id === "xbox",
+      uses_stream_client: id === "xbox" || id === "playstation" || id === "handheld",
+      official_client_name: id === "playstation" ? "Chiaki-ng" : (id === "handheld" ? "Moonlight" : "XStreamingDesktop"),
+    };
+  }
+
+  const FAULT_I18N = {
+    "zh-TW": {
+      NIC_NOT_FOUND: ["未偵測到有線網卡", "請檢查本機有線網卡或插好 USB 轉接器"],
+      NIC_PCIE_PARENT_DISABLED: ["PCIe 上級通道停用", "網卡父級 PCIe 根連接埠被停用，點「一鍵修復」喚醒"],
+      NIC_DISABLED: ["有線網卡已停用", "有線介面卡目前停用中，點「一鍵修復」立即啟用"],
+      NIC_POWERSAVE_ENABLED: ["網卡節能已開啟", "EEE/綠色節能可能導致串流微卡頓，點「一鍵修復」關閉"],
+      CABLE_UNPLUGGED: ["網路線未插好", "請確認網路線已插緊電腦與開機後的目標裝置"],
+      LINK_DEGRADED_100M: ["協商速率僅 100M", "建議更換 Cat5e/Cat6 千兆網路線以確保穩定頻寬"],
+      NIC_HW_ERRORS: ["線材硬體錯包偏高", "偵測到大量傳輸錯包，建議重插或更換網路線"],
+      VPN_TUN_ACTIVE: ["VPN 接管預設路由", "請先暫時中斷 VPN 連線，再點「開啟遊戲直連」"],
+      ICS_ACTIVE: ["系統 ICS 衝突中", "Windows ICS 會佔用 TUN/WinNAT 連接埠，點「一鍵修復」清理"],
+      PORT_53_67_OCCUPIED: ["UDP 53/67 埠被佔用", "系統 DHCP/DNS 連接埠衝突，請清理 ICS 或釋放佔用服務"],
+      PORT_53_NON_ICS_WARNING: ["第三方本機 DNS 佔用 53 埠", "不影響有線直連；已略過以免誤關您的本機 DNS 程式"],
+      FOREIGN_NETNAT_EXISTS: ["偵測到其他 NetNat", "系統存在非 WireDeck 建立的 NetNat，請先確認清理"],
+      ETH_IP_MISSING: ["有線靜態 IP 遺失", "請點「一鍵修復」重新寫入本機有線網段參數"],
+      ETH_HAS_UNEXPECTED_GATEWAY: ["有線網卡誤設預設閘道", "直連網卡不應保留預設閘道，請重新套用直連修復"],
+      FORWARDING_DISABLED: ["IPv4 轉發未開啟", "點「一鍵修復」啟用網路介面轉發以恢復上網共用"],
+      FW_RULE_MISSING: ["子網路防火牆規則遺失", "點「一鍵修復」補回 WireDeck 專屬防火牆放行規則"],
+      PEER_UNREACHABLE: ["目標裝置尚未連通", "請確認裝置開機並已在網路設定填入「首次精靈」靜態 IP"],
+      HOST_INTERNET_DOWN: ["電腦本機無上網出口", "請檢查 Wi-Fi 或手機熱點是否已連網"],
+      XBOX_LIVE_UNREACHABLE: ["Xbox Live 認證無法連線", "Xbox 伺服器未回應，請重試或檢查上游網路連線"],
+      PSN_UNREACHABLE: ["PSN 認證端點無法連線", "PlayStation 認證未回應，請重試或檢查上游網路連線"],
+      NINTENDO_UNREACHABLE: ["任天堂連線檢測未通過", "ctest.cdn.nintendo.net 未回應，請檢查上游網路或 DNS"],
+      UWP_LOOPBACK_MISSING: ["UWP 迴圈代理攔截", "請套用 UWP 豁免，避免系統代理攔截微軟商店與 Xbox"],
+      STREAM_CLIENT_MISSING: ["未偵測到 Xbox 串流端", "建議於「首次精靈」下載已驗證的 XStreaming 或安裝 Xbox 應用"],
+      PS_CLIENT_MISSING: ["未偵測到 PS 串流端", "建議於「首次精靈」取得 Chiaki-ng 或安裝 PS Remote Play"],
+      HANDHELD_CLIENT_MISSING: ["未偵測到掌機串流端", "建議於「首次精靈」取得 Moonlight 或安裝 Steam / Sunshine"],
+    },
+    "en": {
+      NIC_NOT_FOUND: ["Wired NIC Not Found", "Check Ethernet hardware or plug in a USB wired adapter"],
+      NIC_PCIE_PARENT_DISABLED: ["PCIe Port Disabled", "Parent PCIe root port is disabled; click Fix Now to wake it"],
+      NIC_DISABLED: ["Wired NIC Disabled", "Wired adapter is disabled; click Fix Now to enable it"],
+      NIC_POWERSAVE_ENABLED: ["NIC Power-Save On", "EEE/Green Ethernet can cause stream stutter; click Fix Now"],
+      CABLE_UNPLUGGED: ["Cable Unplugged", "Plug Ethernet cable firmly into laptop and powered-on device"],
+      LINK_DEGRADED_100M: ["100 Mbps Link", "Negotiated 100 Mbps; use a Cat5e/Cat6 Gigabit cable"],
+      NIC_HW_ERRORS: ["Cable Packet Errors", "High hardware packet errors; reseat or replace Ethernet cable"],
+      VPN_TUN_ACTIVE: ["VPN Taking Over Route", "Disconnect your VPN first, then click Enable Direct"],
+      ICS_ACTIVE: ["Windows ICS Active", "Windows ICS conflicts with TUN/WinNAT; click Fix Now to clear"],
+      PORT_53_67_OCCUPIED: ["UDP 53/67 In Use", "ICS/DHCP port conflict; clear ICS or stop conflicting service"],
+      PORT_53_NON_ICS_WARNING: ["Local DNS on UDP 53", "Third-party local DNS uses port 53 (does not block Direct)"],
+      FOREIGN_NETNAT_EXISTS: ["Other NetNat Found", "Another NetNat exists; confirm clearing before enabling Direct"],
+      ETH_IP_MISSING: ["Wired Static IP Missing", "Static host IP missing; click Fix Now to reapply"],
+      ETH_HAS_UNEXPECTED_GATEWAY: ["Unexpected Gateway", "Wired NIC should not hold a default gateway; reapply Direct"],
+      FORWARDING_DISABLED: ["IP Forwarding Off", "IPv4 forwarding is disabled; click Fix Now to reapply"],
+      FW_RULE_MISSING: ["Firewall Rule Missing", "WireDeck subnet firewall rule missing; click Fix Now"],
+      PEER_UNREACHABLE: ["Device Unreachable", "Power on device and apply the static IP in First Setup"],
+      HOST_INTERNET_DOWN: ["No Internet on Laptop", "Check your Wi-Fi or hotspot internet connection"],
+      XBOX_LIVE_UNREACHABLE: ["Xbox Live Unreachable", "Xbox auth endpoint did not respond; retry or check network"],
+      PSN_UNREACHABLE: ["PSN Unreachable", "PlayStation auth endpoint did not respond; check upstream link"],
+      NINTENDO_UNREACHABLE: ["Nintendo Check Failed", "ctest.cdn.nintendo.net did not respond; check upstream DNS"],
+      UWP_LOOPBACK_MISSING: ["UWP Loopback Blocked", "Exempt Store & Xbox apps so proxies do not block login"],
+      STREAM_CLIENT_MISSING: ["No Xbox Stream Client", "Download verified XStreaming or install Xbox App in First Setup"],
+      PS_CLIENT_MISSING: ["No PS Stream Client", "Get open-source Chiaki-ng or PS Remote Play in First Setup"],
+      HANDHELD_CLIENT_MISSING: ["No Handheld Streamer", "Get Moonlight / Sunshine or use Steam Remote Play in First Setup"],
+    },
+    "ja": {
+      NIC_NOT_FOUND: ["有線 LAN が見つかりません", "内蔵 LAN または USB 有線アダプターを確認してください"],
+      NIC_PCIE_PARENT_DISABLED: ["PCIe 上位ポートが無効", "親 PCIe ルートポートが停止中です。「ワンクリック修復」で復帰します"],
+      NIC_DISABLED: ["有線 LAN が無効", "有線アダプターが無効です。「ワンクリック修復」で有効化できます"],
+      NIC_POWERSAVE_ENABLED: ["NIC 省電力機能が有効", "EEE 省電力は配信カクつきの原因になります。「ワンクリック修復」で解除"],
+      CABLE_UNPLUGGED: ["LAN ケーブル未接続", "ケーブルが PC と電源オンの機器にしっかり挿さっているか確認してください"],
+      LINK_DEGRADED_100M: ["100 Mbps リンクに低下", "Cat5e / Cat6 以上のギガビット対応ケーブルをご使用ください"],
+      NIC_HW_ERRORS: ["ケーブル通信エラー多数", "ハードウェアエラーが増加しています。ケーブルを交換または差し直してください"],
+      VPN_TUN_ACTIVE: ["VPN がルートを専有中", "一度 VPN を切断してから「直結を有効化」を押してください"],
+      ICS_ACTIVE: ["Windows ICS が競合中", "Windows の ICS が WinNAT と競合します。「ワンクリック修復」で解除します"],
+      PORT_53_67_OCCUPIED: ["UDP 53/67 ポート使用中", "ICS や DHCP 競合サービスを停止してください"],
+      PORT_53_NON_ICS_WARNING: ["ローカル DNS が 53 番使用中", "他社ローカル DNS の利用であり直結はブロックされません"],
+      FOREIGN_NETNAT_EXISTS: ["他社製の NetNat を検出", "WireDeck 以外の NetNat が存在します。削除を確認してください"],
+      ETH_IP_MISSING: ["有線固定 IP が未設定", "ホスト側固定 IP がありません。「ワンクリック修復」で再適用します"],
+      ETH_HAS_UNEXPECTED_GATEWAY: ["予期しないゲートウェイ", "有線直結側にはゲートウェイを設定しません。再適用して修正します"],
+      FORWARDING_DISABLED: ["IPv4 転送が無効", "IP 転送がオフです。「ワンクリック修復」で有効化します"],
+      FW_RULE_MISSING: ["ファイアウォール規則なし", "WireDeck サブネット規則がありません。「ワンクリック修復」で作成します"],
+      PEER_UNREACHABLE: ["接続先機器に応答なし", "機器の電源を入れ、「初期設定」の固定 IP を設定してください"],
+      HOST_INTERNET_DOWN: ["PC 側のインターネット未接続", "Wi-Fi またはテザリング回線を確認してください"],
+      XBOX_LIVE_UNREACHABLE: ["Xbox Live 接続不可", "Xbox 認証サーバーが応答しません。上流回線を確認してください"],
+      PSN_UNREACHABLE: ["PSN 認証サーバー接続不可", "PlayStation 認証エンドポイントが応答しません。回線を確認してください"],
+      NINTENDO_UNREACHABLE: ["任天堂接続チェック失敗", "ctest.cdn.nintendo.net が応答しません。DNS や上流回線を確認してください"],
+      UWP_LOOPBACK_MISSING: ["UWP ループバック遮断", "Store / Xbox アプリをプロキシ例外に追加してください"],
+      STREAM_CLIENT_MISSING: ["Xbox 用アプリ未検出", "「初期設定」から検証済み XStreaming または Xbox アプリを導入してください"],
+      PS_CLIENT_MISSING: ["PS 用配信アプリ未検出", "「初期設定」から Chiaki-ng または PS Remote Play を入手してください"],
+      HANDHELD_CLIENT_MISSING: ["携帯機用配信アプリ未検出", "「初期設定」から Moonlight / Sunshine または Steam を導入してください"],
+    },
   };
 
   function localizeFault(f) {
     if (!f) return null;
-    if (state.lang !== "en" || f.source === "extension") {
+    if (f.source === "extension" || state.lang === "zh-CN") {
       return { title: f.title || f.code, message: f.message || "" };
     }
-    const pair = EN_FAULTS[f.code];
+    const table = FAULT_I18N[state.lang];
+    const pair = table && table[f.code];
     if (pair) return { title: pair[0], message: pair[1] };
     return { title: f.title || f.code, message: f.message || "" };
   }
 
   function localizeHeadline(report) {
-    if (state.lang !== "en") return report.headline || "";
     if (report.primary_fault) {
+      if (state.lang === "zh-CN" && report.headline) return report.headline;
       const lf = localizeFault(report.primary_fault);
-      return `Issue Detected: ${lf.title}`;
+      return `${t("headline_issue_prefix")}${lf.title}`;
     }
-    if (report.mode === "direct") return "Gigabit Direct Active — Ready to Play";
-    return "Ready — Click Enable Direct to Play";
+    if (report.mode === "direct") return t("headline_direct");
+    return t("headline_normal");
   }
 
   function setBusy(busy) {
@@ -155,38 +256,32 @@
       const lf = localizeFault(primary);
       return lf.message || lf.title;
     }
-    const isEn = state.lang === "en";
     const m = layer.metrics || {};
     if (layer.layer === "L1") {
       return m.selected_ethernet
-        ? (isEn ? `${m.selected_ethernet} · Power-save off` : `${m.selected_ethernet} · 节能已关`)
+        ? `${m.selected_ethernet} · ${t("detail_ps_off")}`
         : (layer.summary || "—");
     }
     if (layer.layer === "L2") {
-      if (layer.status === "idle") return isEn ? "Waiting for NIC" : "待网卡就绪";
-      return layer.summary ? (isEn ? `${layer.summary} Full Duplex` : `${layer.summary} 全双工`) : "—";
+      if (layer.status === "idle") return t("detail_wait_nic");
+      return layer.summary ? `${layer.summary} ${t("detail_full_duplex")}` : "—";
     }
     if (layer.layer === "L3") {
-      return isEn ? "No VPN TUN / ICS / port conflicts" : "无 VPN TUN / ICS / 端口冲突";
+      return t("detail_no_conflict");
     }
     if (layer.layer === "L4") {
-      return m.nat_active
-        ? (isEn ? "WireDeckNat active · IP Forwarding enabled" : "WireDeckNat 运行中 · IP Forwarding 已开")
-        : (isEn ? "Standby (normal internet mode)" : "未开启（日常上网模式）");
+      return m.nat_active ? t("detail_nat_on") : t("detail_nat_standby");
     }
     if (layer.layer === "L5/L6") {
       if (layer.status === "idle") {
-        const appTail = combinedL6 && combinedL6.status === "ok"
-          ? (isEn ? " · Stream client ready" : " · 串流端已就绪")
-          : "";
-        return (isEn ? "Waiting for Ethernet link" : "待网线连通") + appTail;
+        const appTail = combinedL6 && combinedL6.status === "ok" ? ` · ${t("detail_client_ready")}` : "";
+        return t("detail_wait_cable") + appTail;
       }
       const parts = [];
       if (m.peer_ip) parts.push(m.peer_ip);
       if (typeof m.peer_rtt_ms === "number") parts.push(`${m.peer_rtt_ms.toFixed(1)} ms`);
-      else if (layer.summary && !isEn && layer.summary !== "已就绪") parts.push(layer.summary);
-      if (combinedL6 && combinedL6.status === "ok") parts.push(isEn ? "Stream client ready" : "串流端已就绪");
-      if (combinedL6 && combinedL6.status === "skipped") parts.push(isEn ? "Lightweight profile" : "轻量模式");
+      if (combinedL6 && combinedL6.status === "ok") parts.push(t("detail_client_ready"));
+      if (combinedL6 && combinedL6.status === "skipped") parts.push(t("detail_no_client_preset"));
       return parts.join(" · ") || "—";
     }
     return layer.summary || "—";
@@ -207,20 +302,24 @@
 
     const ethName = (byId.L1 && byId.L1.metrics && byId.L1.metrics.selected_ethernet) || "";
     const speedTxt = (byId.L2 && byId.L2.summary) || "";
-    const isEn = state.lang === "en";
     const shareActive = Boolean(byId.L4 && byId.L4.metrics && byId.L4.metrics.nat_active);
     const metaParts = [];
     if (ethName) metaParts.push(ethName);
     if (speedTxt && speedTxt !== "待检测" && speedTxt !== "未插线") metaParts.push(speedTxt);
-    metaParts.push(shareActive ? (isEn ? "WinNAT Active" : "WinNAT 已开启") : (isEn ? "WinNAT Standby" : "WinNAT 未开启"));
+    metaParts.push(shareActive ? t("meta_nat_on") : t("meta_nat_off"));
     document.getElementById("ctrlMeta").textContent = metaParts.join(" · ") || "—";
 
-    const profileMap = isEn
-      ? { xbox: "Xbox Series X|S", ps5: "PS5 (Light)", generic: "Generic Console" }
-      : { xbox: "Xbox Series X|S", ps5: "PS5（轻量）", generic: "通用主机" };
-    document.getElementById("sbProfile").textContent = profileMap[report.console_profile] || report.console_profile;
+    const presetId = getActivePresetId(report);
+    const presetMeta = getActivePresetMeta(report);
+    document.getElementById("sbProfile").textContent = t(`preset_${presetId}_name`);
 
-    // Combine L5 + L6 cleanly into Row 5 (never show OK when L5 itself is still idle/unplugged!)
+    const launchBtn = document.getElementById("btnLaunchStream");
+    const launchSep = document.getElementById("sbLaunchSep");
+    const showLaunch = Boolean(presetMeta.uses_stream_client);
+    if (launchBtn) launchBtn.style.display = showLaunch ? "inline-flex" : "none";
+    if (launchSep) launchSep.style.display = showLaunch ? "inline" : "none";
+
+    // Combine L5 + L6 cleanly into Row 5 (never show OK when L5 itself is still idle/unplugged)
     const l5 = byId.L5 || { layer: "L5", status: "idle", summary: "待检测", faults: [], metrics: {} };
     const l6 = byId.L6 || { layer: "L6", status: "skipped", summary: "", faults: [], metrics: {} };
     let combinedStatus = severityRank(l6.status) > severityRank(l5.status) ? l6.status : l5.status;
@@ -285,7 +384,6 @@
       table.appendChild(rowEl);
     });
 
-    // Native InfoBar (with multi-blocker count so nothing is hidden)
     const bpCard = document.getElementById("breakpointCard");
     if (pf) {
       const allFails = layers.flatMap((x) => (x.faults || []).filter((f) => f.severity === "fail"));
@@ -295,7 +393,7 @@
       bpCard.classList.toggle("warn", pf.severity === "warn");
       document.getElementById("bpIcon").textContent = pf.severity === "warn" ? "!" : "✕";
       document.getElementById("bpTitle").textContent = lf.title;
-      const suffix = extraFails > 0 ? `（${t("more_blockers").replace("{n}", String(extraFails))}）` : "";
+      const suffix = extraFails > 0 ? ` (${t("more_blockers").replace("{n}", String(extraFails))})` : "";
       document.getElementById("bpMessage").textContent = lf.message + suffix;
       document.getElementById("bpExtPill").style.display = pf.source === "extension" ? "inline-flex" : "none";
 
@@ -317,7 +415,6 @@
       bpCard.classList.add("hidden");
     }
 
-    // Action buttons + disabled reason tooltip
     const btnEn = document.getElementById("btnEnableDirect");
     btnEn.disabled = state.busy || !report.can_enable_direct;
     btnEn.title = report.can_enable_direct ? "" : t("disabled_hint");
@@ -335,32 +432,83 @@
     const l5 = byId.L5 || { status: "idle" };
     const l6 = byId.L6 || { status: "skipped", faults: [], metrics: {} };
 
+    const presetId = getActivePresetId(report);
+    const presetMeta = getActivePresetMeta(report);
+    const steps = presetMeta.wizard_steps || DEFAULT_WIZARD_STEPS[presetId] || ["nic", "peer"];
+
+    const hasNic = steps.includes("nic");
+    const hasUwp = steps.includes("uwp");
+    const hasClient = steps.includes("client");
+    const hasPeer = steps.includes("peer");
+
+    const elS1 = document.getElementById("wizStep1");
+    const elS2 = document.getElementById("wizStep2");
+    const elS3 = document.getElementById("wizStep3");
+    const elS4 = document.getElementById("wizStep4");
+
+    elS1.style.display = hasNic ? "flex" : "none";
+    elS2.style.display = hasUwp ? "flex" : "none";
+    elS3.style.display = hasClient ? "flex" : "none";
+    elS4.style.display = hasPeer ? "block" : "none";
+
+    // Dynamic sequential numbering (e.g. PS has 1,2,3; Switch has 1,2; Xbox has 1,2,3,4)
+    let stepNum = 1;
+    if (hasNic) document.getElementById("wizS1Title").textContent = `${stepNum++}. ${t("wiz_nic_title")}`;
+    if (hasUwp) document.getElementById("wizS2Title").textContent = `${stepNum++}. ${t("wiz_uwp_title")}`;
+    if (hasClient) document.getElementById("wizS3Title").textContent = `${stepNum++}. ${t("wiz_client_title")}`;
+    if (hasPeer) document.getElementById("wizS4Title").textContent = `${stepNum++}. ${t("wiz_peer_title")}`;
+
     const s1Status = (l1.status === "ok" && l2.status === "ok") ? "ok" : (l1.status === "fail" ? "fail" : "warn");
     setBadge("wizS1Badge", s1Status);
-
-    const isXbox = report.console_profile === "xbox";
-    document.getElementById("wizStep2").classList.toggle("skipped", !isXbox);
-    document.getElementById("wizStep3").classList.toggle("skipped", !isXbox);
     let hasWizTodo = (s1Status !== "ok");
-    if (!isXbox) {
-      setBadge("wizS2Badge", "skipped");
-      setBadge("wizS3Badge", "skipped");
-    } else {
+
+    if (hasUwp) {
       const hasUwpMiss = (l6.faults || []).some((f) => f.code === "UWP_LOOPBACK_MISSING");
-      const hasClientMiss = (l6.faults || []).some((f) => f.code === "STREAM_CLIENT_MISSING");
       setBadge("wizS2Badge", hasUwpMiss ? "warn" : "ok");
+      if (hasUwpMiss) hasWizTodo = true;
+    }
+
+    if (hasClient) {
+      const hasClientMiss = (l6.faults || []).some((f) =>
+        f.code === "STREAM_CLIENT_MISSING" || f.code === "PS_CLIENT_MISSING" || f.code === "HANDHELD_CLIENT_MISSING"
+      );
       setBadge("wizS3Badge", hasClientMiss ? "warn" : "ok");
-      if (hasUwpMiss || hasClientMiss) hasWizTodo = true;
+      if (hasClientMiss) hasWizTodo = true;
 
       const s3Desc = document.getElementById("wizS3Desc");
       const m6 = l6.metrics || {};
+      const btnDl = document.getElementById("btnWizDownload");
+      if (btnDl) {
+        btnDl.textContent = presetId === "xbox" ? t("wiz_s3_btn") : t("wiz_btn_open_release");
+      }
       if (s3Desc) {
-        if (m6.xstreaming_path) s3Desc.textContent = t("wiz_client_xstreaming");
-        else if (m6.xbox_app_installed) s3Desc.textContent = t("wiz_client_xbox");
-        else s3Desc.textContent = t("wiz_client_none");
+        if (presetId === "xbox") {
+          if (m6.xstreaming_path) s3Desc.textContent = t("wiz_client_xstreaming");
+          else if (m6.xbox_app_installed) s3Desc.textContent = t("wiz_client_xbox");
+          else s3Desc.textContent = t("wiz_client_none");
+        } else if (presetId === "playstation") {
+          if (m6.chiaki_path) s3Desc.textContent = t("wiz_client_ps_chiaki");
+          else if (m6.ps_remote_path) s3Desc.textContent = t("wiz_client_ps_remote");
+          else s3Desc.textContent = t("wiz_client_ps_none");
+        } else if (presetId === "handheld") {
+          if (m6.moonlight_path) s3Desc.textContent = t("wiz_client_hh_moonlight");
+          else if (m6.steam_path || m6.sunshine_path) s3Desc.textContent = t("wiz_client_hh_steam");
+          else s3Desc.textContent = t("wiz_client_hh_none");
+        }
       }
     }
+
     setBadge("wizS4Badge", l5.status === "ok" ? "ok" : "idle");
+
+    const nmcliBtn = document.getElementById("btnWizCopyNmcli");
+    if (nmcliBtn) {
+      nmcliBtn.style.display = (presetId === "handheld" || presetId === "other") ? "inline-flex" : "none";
+    }
+    const tipLine = document.getElementById("wizTipLine");
+    if (tipLine) {
+      tipLine.textContent = t(`wiz_tip_${presetId}`);
+    }
+
     const wizDot = document.getElementById("wizDot");
     if (wizDot) wizDot.classList.toggle("show", hasWizTodo);
   }
@@ -396,6 +544,13 @@
     }
     _lastDetailText = lines.join("\n");
     document.getElementById("detailBody").innerHTML = lines.map((x) => `<div>${escapeHtml(x)}</div>`).join("");
+    document.getElementById("detailModal").classList.add("open");
+  }
+
+  function openTextModal(title, rawText) {
+    document.getElementById("detailTitle").textContent = title;
+    _lastDetailText = rawText;
+    document.getElementById("detailBody").innerHTML = `<pre class="mono" style="margin:0;white-space:pre-wrap;word-break:break-word;font-size:12px;">${escapeHtml(rawText)}</pre>`;
     document.getElementById("detailModal").classList.add("open");
   }
 
@@ -450,6 +605,54 @@
     });
   }
 
+  function renderToolkits(items) {
+    state.toolkits = items || [];
+    const list = document.getElementById("toolkitList");
+    const countTag = document.getElementById("toolkitCountTag");
+    if (countTag) countTag.textContent = String(state.toolkits.length);
+    if (!list) return;
+    list.innerHTML = "";
+    const isZh = state.lang === "zh-CN" || state.lang === "zh-TW";
+    state.toolkits.forEach((tool) => {
+      const row = document.createElement("div");
+      row.className = "list-row";
+      const scopeLabel = tool.scope === "common" ? t("ai_tool_common") : tool.scope.toUpperCase();
+      const title = isZh ? (tool.name_zh || tool.name_en || tool.id) : (tool.name_en || tool.name_zh || tool.id);
+      const desc = isZh ? (tool.description_zh || tool.description_en || "") : (tool.description_en || tool.description_zh || "");
+      row.innerHTML = `
+        <div class="list-row-col">
+          <div class="row-head">
+            <span class="ext-tag">${escapeHtml(scopeLabel)}</span>
+            <span>${escapeHtml(title)}</span>
+          </div>
+          <div class="row-desc">${escapeHtml(desc)}</div>
+        </div>
+        <div class="row-actions">
+          <button class="btn btn-sm" data-tool-run="${escapeHtml(tool.id)}">${escapeHtml(t("ai_tool_run"))}</button>
+        </div>
+      `;
+      list.appendChild(row);
+    });
+
+    list.querySelectorAll("[data-tool-run]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const id = btn.getAttribute("data-tool-run");
+        const api = getApi();
+        if (!api || !api.run_toolkit) return;
+        btn.disabled = true;
+        showToast(t("ai_tool_running"));
+        try {
+          const res = await api.run_toolkit(id);
+          openTextModal(`${t("ai_tool_result_title")} — ${id}`, JSON.stringify(res, null, 2));
+        } catch (err) {
+          showToast(String(err));
+        } finally {
+          btn.disabled = false;
+        }
+      });
+    });
+  }
+
   function renderExtensions(entries) {
     state.extensions = entries || [];
     const list = document.getElementById("extList");
@@ -496,6 +699,38 @@
     list.querySelectorAll("[data-ext-fix]").forEach((btn) => {
       btn.addEventListener("click", () => runAction("run-ext", { ext_id: btn.getAttribute("data-ext-fix") }));
     });
+  }
+
+  function renderOnboardingModal() {
+    document.querySelectorAll("[data-onb-lang]").forEach((btn) => {
+      btn.classList.toggle("active", btn.getAttribute("data-onb-lang") === state.onbSelectedLang);
+    });
+    const grid = document.getElementById("onbPresetGrid");
+    if (!grid) return;
+    grid.innerHTML = "";
+    PRESET_ORDER.forEach((pid) => {
+      const card = document.createElement("button");
+      card.type = "button";
+      card.className = "preset-card" + (pid === "other" ? " span-2" : "") + (state.onbSelectedPreset === pid ? " active" : "");
+      card.setAttribute("data-onb-preset", pid);
+      card.innerHTML = `
+        <div class="preset-card-title">${escapeHtml(t(`preset_${pid}_name`))}</div>
+        <div class="preset-card-desc">${escapeHtml(t(`preset_${pid}_desc`))}</div>
+      `;
+      card.addEventListener("click", () => {
+        state.onbSelectedPreset = pid;
+        renderOnboardingModal();
+      });
+      grid.appendChild(card);
+    });
+  }
+
+  function openOnboardingModal() {
+    const cfg = (state.appState && state.appState.config) || {};
+    state.onbSelectedLang = state.lang || cfg.language || "zh-CN";
+    state.onbSelectedPreset = getActivePresetId(state.report) || cfg.active_preset || "xbox";
+    renderOnboardingModal();
+    document.getElementById("onboardingModal").classList.add("open");
   }
 
   function renderBridgeState(bridge) {
@@ -546,11 +781,16 @@
     state.lang = cfg.language || "zh-CN";
     applyTheme(cfg.theme || "light");
     applyI18n();
+    const activeId = (state.appState && state.appState.active_preset && state.appState.active_preset.id)
+      || cfg.active_preset
+      || cfg.console_profile
+      || "xbox";
     document.getElementById("setTheme").value = state.theme;
-    document.getElementById("setLanguage").value = cfg.language || "zh-CN";
-    document.getElementById("setProfile").value = cfg.console_profile || "xbox";
+    document.getElementById("setLanguage").value = state.lang;
+    document.getElementById("setProfile").value = activeId;
     document.getElementById("setHostIp").value = cfg.host_ip || "192.168.50.2";
     document.getElementById("setPeerIp").value = cfg.peer_ip || "192.168.50.1";
+    document.getElementById("setDns").value = (cfg.dns_servers || ["223.5.5.5", "8.8.8.8"]).join(", ");
     document.getElementById("sbSubnet").textContent = `${cfg.host_ip} → ${cfg.peer_ip}`;
     document.getElementById("cardPeerIp").textContent = cfg.peer_ip;
     document.getElementById("cardMask").textContent = cfg.subnet_mask || "255.255.255.0";
@@ -568,10 +808,18 @@
       document.getElementById("versionLabel").textContent = "v" + st.app_version;
       syncConfigDisplay(st.config);
       renderBridgeState(st.bridge);
-      const [rep, exts] = await Promise.all([api.diagnose(), api.list_extensions()]);
+      const [rep, exts, tools] = await Promise.all([
+        api.diagnose(),
+        api.list_extensions(),
+        api.list_toolkits ? api.list_toolkits() : Promise.resolve([]),
+      ]);
       renderReport(rep);
       renderExtensions(exts);
+      renderToolkits(tools);
 
+      if (st.show_onboarding && !state.onboardingDismissed) {
+        openOnboardingModal();
+      }
       if (st.preview_view && !refreshAll._previewApplied) {
         refreshAll._previewApplied = true;
         switchView(st.preview_view);
@@ -620,6 +868,8 @@
     document.querySelectorAll("[data-nav]").forEach((btn) => {
       btn.addEventListener("click", () => switchView(btn.getAttribute("data-nav")));
     });
+
+    document.getElementById("sbProfile").addEventListener("click", () => switchView("settings"));
 
     document.getElementById("btnRefresh").addEventListener("click", () => refreshAll(false));
     document.getElementById("btnWizRefresh").addEventListener("click", () => refreshAll(false));
@@ -690,6 +940,19 @@
       await copyText(txt);
       showToast(t("toast_copied"));
     });
+    document.getElementById("btnWizCopyNmcli").addEventListener("click", async () => {
+      const api = getApi();
+      const cfg = (state.appState && state.appState.config) || {};
+      let cmd = `sudo nmcli con mod "Wired connection 1" ipv4.method manual ipv4.addresses ${cfg.peer_ip || "192.168.50.30"}/${cfg.prefix_length || 24} ipv4.gateway ${cfg.host_ip || "192.168.50.2"} ipv4.dns "${(cfg.dns_servers || ["223.5.5.5", "8.8.8.8"]).join(" ")}" && sudo nmcli con up "Wired connection 1"`;
+      if (api && api.run_toolkit) {
+        try {
+          const r = await api.run_toolkit("handheld/emit-linux-nmcli-script");
+          if (r && r.ok && r.data && r.data.nmcli_setup) cmd = r.data.nmcli_setup;
+        } catch (_) {}
+      }
+      await copyText(cmd);
+      showToast(t("toast_copied"));
+    });
     document.getElementById("btnWizDownload").addEventListener("click", async () => {
       const api = getApi();
       if (!api) return;
@@ -702,6 +965,10 @@
     document.getElementById("btnOpenExtFolder").addEventListener("click", () => getApi() && getApi().open_folder("extensions"));
     document.getElementById("btnOpenLogs").addEventListener("click", () => getApi() && getApi().open_folder("logs"));
     document.getElementById("btnOpenData").addEventListener("click", () => getApi() && getApi().open_folder("data"));
+    document.getElementById("btnRerunOnboarding").addEventListener("click", () => {
+      state.onboardingDismissed = false;
+      openOnboardingModal();
+    });
     document.getElementById("btnResetNic").addEventListener("click", () => {
       document.getElementById("confirmTitle").textContent = t("confirm_reset_title");
       document.getElementById("confirmBody").textContent = t("confirm_reset_body");
@@ -709,7 +976,28 @@
       document.getElementById("confirmModal").classList.add("open");
     });
 
-    // Live instant preview + auto-save on Theme / Language switch (Windows 11 Settings feel)
+    // Startup Onboarding modal language pills + confirm
+    document.querySelectorAll("[data-onb-lang]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const lang = btn.getAttribute("data-onb-lang");
+        state.onbSelectedLang = lang;
+        state.lang = lang;
+        applyI18n();
+        renderOnboardingModal();
+        if (state.report) renderReport(state.report);
+      });
+    });
+    document.getElementById("btnOnbStart").addEventListener("click", async () => {
+      const api = getApi();
+      state.onboardingDismissed = true;
+      document.getElementById("onboardingModal").classList.remove("open");
+      if (api && api.complete_onboarding) {
+        await api.complete_onboarding(state.onbSelectedLang, state.onbSelectedPreset);
+        await refreshAll(true);
+      }
+    });
+
+    // Live instant preview + auto-save on Theme / Language / Preset switch
     document.getElementById("setTheme").addEventListener("change", async (e) => {
       applyTheme(e.target.value);
       const api = getApi();
@@ -722,6 +1010,15 @@
       if (api) {
         await api.save_settings({ language: e.target.value });
         if (state.report) renderReport(state.report);
+        if (state.toolkits.length) renderToolkits(state.toolkits);
+      }
+    });
+    document.getElementById("setProfile").addEventListener("change", async (e) => {
+      const api = getApi();
+      if (!api || !api.switch_preset) return;
+      const res = await api.switch_preset(e.target.value);
+      if (res && res.ok) {
+        await refreshAll(true);
       }
     });
 
@@ -744,10 +1041,11 @@
       const patch = {
         theme: document.getElementById("setTheme").value,
         language: document.getElementById("setLanguage").value,
-        console_profile: document.getElementById("setProfile").value,
+        active_preset: document.getElementById("setProfile").value,
         ethernet_interface: document.getElementById("setEth").value,
         host_ip: document.getElementById("setHostIp").value.trim(),
         peer_ip: document.getElementById("setPeerIp").value.trim(),
+        dns_servers: document.getElementById("setDns").value.trim(),
       };
       const res = await api.save_settings(patch);
       if (!res.ok) {

@@ -112,6 +112,36 @@ def test_tier_b_dual_pe_subsystems_and_cli_contract(tmp_path: Path):
     assert out_bundle.is_file()
     assert json.loads(out_bundle.read_text(encoding="utf-8"))["schema_version"] == "1.0"
 
+    # 5. Bundled AI toolkits list & run from frozen CLI
+    r_tk_list = subprocess.run(
+        [str(CLI_EXE), "toolkit", "list", "--preset", "playstation", "--json"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=15,
+        creationflags=CREATE_NO_WINDOW,
+    )
+    assert r_tk_list.returncode == 0, r_tk_list.stderr
+    ps_tools = json.loads(r_tk_list.stdout)
+    assert ps_tools["active_preset"] == "playstation"
+    ps_tool_ids = {t["id"] for t in ps_tools["toolkits"]}
+    assert "common/probe-route-table" in ps_tool_ids
+    assert "playstation/check-psn-endpoints" in ps_tool_ids
+    assert "xbox/audit-uwp-loopback" not in ps_tool_ids
+
+    r_tk_run = subprocess.run(
+        [str(CLI_EXE), "toolkit", "run", "other/emit-peer-config-snippets", "--json"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=15,
+        creationflags=CREATE_NO_WINDOW,
+    )
+    assert r_tk_run.returncode == 0, r_tk_run.stderr
+    tk_run = json.loads(r_tk_run.stdout)
+    assert tk_run["ok"] is True
+    assert "linux" in tk_run["data"] and "macos" in tk_run["data"]
+
 
 @pytest.mark.skipif(not SHA_FILE.is_file(), reason="Release artifacts not built yet")
 def test_tier_b_release_checksums_and_portable_zip_contents():
@@ -127,6 +157,7 @@ def test_tier_b_release_checksums_and_portable_zip_contents():
         assert "WireDeck/WireDeck.exe" in names
         assert "WireDeck/wiredeck-cli.exe" in names
         assert "WireDeck/portable.mode" in names
+        assert "WireDeck/_internal/wiredeck/toolkits/manifest.json" in names
 
 
 @pytest.mark.skipif(not SETUP_EXE.is_file(), reason="Setup EXE not built yet")

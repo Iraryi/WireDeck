@@ -63,6 +63,19 @@ def get_web_dir() -> Path:
     return Path(__file__).resolve().parent / "web"
 
 
+def get_toolkits_dir() -> Path:
+    """Return directory containing bundled read-only AI/DSH toolkits in dev and frozen builds."""
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        bundled = Path(meipass) / "wiredeck" / "toolkits"
+        if bundled.is_dir():
+            return bundled
+        bundled_alt = Path(meipass) / "toolkits"
+        if bundled_alt.is_dir():
+            return bundled_alt
+    return Path(__file__).resolve().parent / "toolkits"
+
+
 def get_assets_dir() -> Path:
     """Return directory containing brand icons and static assets."""
     meipass = getattr(sys, "_MEIPASS", None)

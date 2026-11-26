@@ -42,7 +42,7 @@ def test_wiredeck_api_state_settings_export_and_bridge_toggle(tmp_path: Path):
     saved = api.save_settings({"language": "en", "console_profile": "ps5"})
     assert saved["ok"] is True
     assert api.get_state()["config"]["language"] == "en"
-    assert api.get_state()["config"]["console_profile"] == "ps5"
+    assert api.get_state()["config"]["console_profile"] == "playstation"
 
     # Settings validation rejects invalid IP, duplicate IP, and cross-subnet IP
     assert api.save_settings({"host_ip": "999.1.1.1"})["ok"] is False
@@ -77,8 +77,40 @@ def test_wiredeck_api_state_settings_export_and_bridge_toggle(tmp_path: Path):
     assert sample2["created"] is False
 
 
+    # Startup onboarding, per-preset isolated settings & built-in toolkits
+    assert state["show_onboarding"] is True
+    onb = api.complete_onboarding("ja", "switch")
+    assert onb["ok"] is True
+    assert onb["config"]["onboarding_completed"] is True
+    assert onb["config"]["language"] == "ja"
+    assert onb["config"]["active_preset"] == "switch"
+    assert onb["config"]["peer_ip"] == "192.168.50.20"
+    assert api.get_state()["show_onboarding"] is False
+
+    # Edit Switch peer_ip, switch to PlayStation, verify Switch setting persists independently
+    assert api.save_settings({"peer_ip": "192.168.50.25", "dns_servers": "119.29.29.29, 8.8.8.8"})["ok"] is True
+    sw = api.switch_preset("playstation")
+    assert sw["config"]["peer_ip"] == "192.168.50.10"
+    sw_back = api.switch_preset("switch")
+    assert sw_back["config"]["peer_ip"] == "192.168.50.25"
+    assert sw_back["config"]["dns_servers"] == ["119.29.29.29", "8.8.8.8"]
+
+    # Built-in AI toolkits for active preset + common
+    ps_tools = api.switch_preset("other")
+    assert ps_tools["ok"] is True
+    tools = api.list_toolkits()
+    tool_ids = {t["id"] for t in tools}
+    assert "common/probe-route-table" in tool_ids
+    assert "other/emit-peer-config-snippets" in tool_ids
+    assert "xbox/audit-uwp-loopback" not in tool_ids
+
+    tool_run = api.run_toolkit("other/emit-peer-config-snippets")
+    assert tool_run["ok"] is True
+    assert "linux" in tool_run["data"] and "macos" in tool_run["data"]
+
+
 def test_preview_states_are_deterministic_and_zero_pii():
-    for mode in ("ready", "breakpoint", "wizard", "ai"):
+    for mode in ("ready", "breakpoint", "wizard", "ai", "onboarding"):
         rep = build_preview_report(mode)
         d = rep.to_dict()
         raw = json.dumps(d, ensure_ascii=False)
@@ -98,10 +130,10 @@ def test_i18n_js_has_exact_key_parity_and_concise_home_copy():
     m = re.search(r"window\.WIREDECK_I18N\s*=\s*(\{.*\});", content, re.DOTALL)
     assert m is not None, "i18n.js must assign pure JSON object to window.WIREDECK_I18N"
     data: dict[str, dict[str, Any]] = json.loads(m.group(1))
-    assert set(data.keys()) == {"zh-CN", "en"}
-    zh_keys = set(data["zh-CN"].keys())
-    en_keys = set(data["en"].keys())
-    assert zh_keys == en_keys, f"Key mismatch: {zh_keys ^ en_keys}"
+    assert set(data.keys()) == {"zh-CN", "zh-TW", "en", "ja"}
+    base_keys = set(data["zh-CN"].keys())
+    for lang, d in data.items():
+        assert set(d.keys()) == base_keys, f"Key mismatch for {lang}: {base_keys ^ set(d.keys())}"
 
     # Enforce concise home UI copy discipline
     for key in ("btn_enable_direct", "btn_disable_direct", "node_nic", "node_cable", "node_gate", "node_share", "node_console"):

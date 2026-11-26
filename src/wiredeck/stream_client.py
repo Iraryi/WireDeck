@@ -13,7 +13,12 @@ from pathlib import Path
 from typing import Any, Callable
 
 from wiredeck.models import ActionResult
-from wiredeck.probes import detect_local_xstreaming_path
+from wiredeck.presets import get_preset, normalize_preset_id
+from wiredeck.probes import (
+    detect_local_handheld_clients,
+    detect_local_ps_clients,
+    detect_local_xstreaming_path,
+)
 from wiredeck.ps_runner import CREATE_NO_WINDOW, run_powershell
 
 XSTREAMING_API_URL = "https://api.github.com/repos/Geocld/XStreamingDesktop/releases/latest"
@@ -36,7 +41,7 @@ class ReleaseAssetInfo:
 
 
 def detect_stream_clients() -> dict[str, Any]:
-    """Detect local XStreamingDesktop installation and Microsoft Xbox App."""
+    """Detect local streaming clients across Xbox, PlayStation, and Handheld presets."""
     xstreaming_path = detect_local_xstreaming_path()
     xbox_installed = False
     res = run_powershell(
@@ -48,6 +53,8 @@ def detect_stream_clients() -> dict[str, Any]:
     return {
         "xstreaming_path": xstreaming_path,
         "xbox_app_installed": xbox_installed,
+        **detect_local_ps_clients(),
+        **detect_local_handheld_clients(),
     }
 
 
@@ -180,9 +187,52 @@ def hash_file_sha256(path: Path) -> str:
     return h.hexdigest().lower()
 
 
-def launch_stream_client(prefer: str = "auto") -> ActionResult:
-    """Launch installed XStreamingDesktop or Microsoft Xbox App."""
+def launch_stream_client(prefer: str = "auto", preset_id: str = "xbox") -> ActionResult:
+    """Launch installed streaming client matching the active device preset."""
+    pid = normalize_preset_id(preset_id)
     clients = detect_stream_clients()
+
+    if pid == "playstation":
+        for key, label in (("chiaki_path", "Chiaki-ng"), ("ps_remote_path", "PS Remote Play")):
+            path = clients.get(key)
+            if path:
+                try:
+                    subprocess.Popen([path], cwd=str(Path(path).parent))
+                    return ActionResult(ok=True, code="LAUNCHED", message=f"已启动 {label}", details={"path": path})
+                except Exception as exc:
+                    return ActionResult(ok=False, code="LAUNCH_FAILED", message=f"启动 {label} 失败: {exc}", exit_code=1)
+        return ActionResult(
+            ok=False,
+            code="PS_CLIENT_MISSING",
+            message="未检测到 Chiaki-ng 或 PS Remote Play，请先在向导中下载",
+            exit_code=1,
+        )
+
+    if pid == "handheld":
+        for key, label in (("moonlight_path", "Moonlight"), ("steam_path", "Steam"), ("sunshine_path", "Sunshine")):
+            path = clients.get(key)
+            if path:
+                try:
+                    subprocess.Popen([path], cwd=str(Path(path).parent))
+                    return ActionResult(ok=True, code="LAUNCHED", message=f"已启动 {label}", details={"path": path})
+                except Exception as exc:
+                    return ActionResult(ok=False, code="LAUNCH_FAILED", message=f"启动 {label} 失败: {exc}", exit_code=1)
+        return ActionResult(
+            ok=False,
+            code="HANDHELD_CLIENT_MISSING",
+            message="未检测到 Moonlight / Steam / Sunshine，请先在向导中安装",
+            exit_code=1,
+        )
+
+    if pid in ("switch", "other"):
+        return ActionResult(
+            ok=True,
+            code="NO_CLIENT_NEEDED",
+            message="当前预设无需额外串流客户端，开启直连即可直接联机或共享网络",
+            exit_code=0,
+        )
+
+    # Default: Xbox preset
     xs = clients.get("xstreaming_path")
     xbox_installed = bool(clients.get("xbox_app_installed", False))
 

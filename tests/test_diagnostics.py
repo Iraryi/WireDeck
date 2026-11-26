@@ -303,13 +303,14 @@ def test_foreign_netnat_blocks_with_owner_name():
     assert report.can_enable_direct is False
 
 
-@pytest.mark.parametrize("profile", ["ps5", "generic"])
+@pytest.mark.parametrize("profile", ["switch", "other"])
 def test_non_xbox_profiles_mark_xbox_only_checks_skipped(profile: str):
     cfg = AppConfig(console_profile=profile)
     snap = _healthy_snapshot(direct_active=True)
     snap["uwp_missing_packages"] = ["microsoft.gamingapp_8wekyb3d8bbwe"]
     snap["stream_clients"] = {"xstreaming_path": None, "xbox_app_installed": False}
     snap["connectivity"]["xbox_live_ok"] = False
+    snap["connectivity"]["service_endpoint_ok"] = True
 
     report = classify_snapshot(snap, cfg)
     l5 = next(l for l in report.layers if l.layer == "L5")

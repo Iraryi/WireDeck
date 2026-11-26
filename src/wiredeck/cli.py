@@ -28,8 +28,10 @@ from wiredeck.paths import (
     resolve_app_paths,
     resolve_app_paths_from_data_dir,
 )
+from wiredeck.presets import ALL_PRESET_IDS, PRESET_ALIASES, normalize_preset_id
 from wiredeck.probes import collect_system_snapshot
 from wiredeck.ps_runner import is_admin, run_elevated_worker, run_powershell
+from wiredeck.toolkits import discover_all_toolkits, discover_toolkits, run_toolkit
 from wiredeck.version import APP_NAME, APP_VERSION, NAT_NAME, SCHEMA_VERSION
 
 
@@ -165,7 +167,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     p_diag = sub.add_parser("diagnose", help="Run 6-layer wired direct diagnosis")
     p_diag.add_argument("--json", action="store_true", dest="as_json", help="Output strict JSON")
-    p_diag.add_argument("--console", choices=["xbox", "ps5", "generic"], default=None)
+    p_diag.add_argument("--console", choices=sorted(set(ALL_PRESET_IDS) | set(PRESET_ALIASES.keys())), default=None)
     p_diag.add_argument("--no-extensions", action="store_true")
     p_diag.add_argument("--no-network", action="store_true")
 
@@ -199,6 +201,18 @@ def _build_parser() -> argparse.ArgumentParser:
     p_ext_run.add_argument("--mode", choices=["check", "fix"], default="check")
     p_ext_run.add_argument("--elevate", action="store_true")
     p_ext_run.add_argument("--json", action="store_true", dest="as_json")
+
+    p_tk = sub.add_parser("toolkit", help="List or run bundled read-only AI/DSH diagnostic toolkits")
+    tk_sub = p_tk.add_subparsers(dest="tk_cmd")
+
+    p_tk_list = tk_sub.add_parser("list", help="List bundled common and preset toolkits")
+    p_tk_list.add_argument("--preset", default=None)
+    p_tk_list.add_argument("--all", action="store_true", dest="show_all")
+    p_tk_list.add_argument("--json", action="store_true", dest="as_json")
+
+    p_tk_run = tk_sub.add_parser("run", help="Run a bundled read-only toolkit script")
+    p_tk_run.add_argument("tool_id")
+    p_tk_run.add_argument("--json", action="store_true", dest="as_json")
 
     return parser
 
@@ -337,6 +351,32 @@ def main(argv: list[str] | None = None) -> int:
             return 0 if er.status in (Severity.OK, Severity.IDLE) else 1
 
         parser.parse_args(["ext", "--help"])
+        return 0
+
+    if args.command == "toolkit":
+        if args.tk_cmd == "list":
+            if args.show_all:
+                items = discover_all_toolkits()
+                active_p = "all"
+            else:
+                active_p = normalize_preset_id(args.preset) if args.preset else cfg.active_preset
+                items = discover_toolkits(preset_id=active_p, include_common=True)
+            payload = {
+                "active_preset": active_p,
+                "toolkits": [t.to_dict() for t in items],
+            }
+            lines = [f"Bundled Toolkits ({len(items)}) for preset={active_p}:"]
+            for t in items:
+                lines.append(f"  - {t.id:34s} [{t.scope}] {t.name_zh}")
+            _emit(payload, args.as_json, "\n".join(lines))
+            return 0
+
+        if args.tk_cmd == "run":
+            res = run_toolkit(args.tool_id, cfg=cfg)
+            _emit(res.to_dict(), args.as_json, json.dumps(res.data or {"error": res.error}, ensure_ascii=False, indent=2))
+            return 0 if res.ok else 1
+
+        parser.parse_args(["toolkit", "--help"])
         return 0
 
     return 1

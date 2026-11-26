@@ -16,6 +16,7 @@ from wiredeck.models import (
     Severity,
 )
 from wiredeck.paths import AppPaths
+from wiredeck.presets import get_preset
 from wiredeck.probes import collect_system_snapshot
 from wiredeck.version import APP_VERSION, FW_RULE_NAT, NAT_NAME, SCHEMA_VERSION
 
@@ -523,12 +524,21 @@ def classify_snapshot(
     )
 
     # ---------------- L5: Console & Uplink ----------------
+    preset = get_preset(cfg.active_preset)
     l5_faults: list[FaultItem] = []
+    svc_ok = connectivity.get("service_endpoint_ok")
+    if svc_ok is None and preset.id == "xbox":
+        svc_ok = connectivity.get("xbox_live_ok")
+    svc_status = connectivity.get("service_endpoint_status")
+    if svc_status is None and preset.id == "xbox":
+        svc_status = connectivity.get("xbox_live_status")
+
     l5_metrics: dict[str, Any] = {
+        "preset": preset.id,
         "peer_ip": cfg.peer_ip,
         "peer_rtt_ms": connectivity.get("peer_rtt_ms"),
         "host_internet_ok": connectivity.get("host_internet_ok"),
-        "xbox_live_ok": connectivity.get("xbox_live_ok") if cfg.console_profile == "xbox" else "skipped",
+        "service_endpoint_ok": svc_ok if preset.service_endpoint_url else "skipped",
     }
 
     if l1.status == Severity.FAIL or l2.status == Severity.FAIL:
@@ -537,7 +547,6 @@ def classify_snapshot(
     else:
         peer_ok = connectivity.get("peer_reachable")
         inet_ok = connectivity.get("host_internet_ok")
-        xbox_ok = connectivity.get("xbox_live_ok")
 
         if peer_ok is False:
             l5_faults.append(
@@ -545,8 +554,8 @@ def classify_snapshot(
                     code="PEER_UNREACHABLE",
                     layer="L5",
                     severity=Severity.FAIL if direct_active else Severity.IDLE,
-                    title="未连上游戏机",
-                    message=f"请确认主机已开机并设为静态 IP {cfg.peer_ip}",
+                    title="未连上目标设备",
+                    message=f"请确认设备已开机并设为静态 IP {cfg.peer_ip}",
                     details={"peer_ip": cfg.peer_ip},
                 )
             )
@@ -560,15 +569,23 @@ def classify_snapshot(
                     message="请检查 Wi-Fi/热点连接是否正常上网",
                 )
             )
-        if cfg.console_profile == "xbox" and xbox_ok is False:
+        if preset.service_endpoint_url and preset.service_fault_code and svc_ok is False:
+            svc_titles = {
+                "XBOX_LIVE_UNREACHABLE": ("Xbox 服务响应异常", "Xbox 认证接口暂不可达，请稍后复测或换网络"),
+                "PSN_UNREACHABLE": ("PSN 服务响应异常", "PlayStation 认证接口暂不可达，请检查出口网络"),
+                "NINTENDO_UNREACHABLE": ("任天堂服务异常", "任天堂连通测试端点暂不可达，建议切换 DNS 或网络"),
+            }
+            ftitle, fmsg = svc_titles.get(
+                preset.service_fault_code, ("在线服务响应异常", "预设在线服务端点暂不可达")
+            )
             l5_faults.append(
                 FaultItem(
-                    code="XBOX_LIVE_UNREACHABLE",
+                    code=preset.service_fault_code,
                     layer="L5",
                     severity=Severity.WARN,
-                    title="Xbox 服务响应异常",
-                    message="Xbox 认证接口暂不可达，请稍后复测或换网络",
-                    details={"status": connectivity.get("xbox_live_status")},
+                    title=ftitle,
+                    message=fmsg,
+                    details={"status": svc_status, "endpoint": preset.service_endpoint_url},
                 )
             )
 
@@ -597,21 +614,27 @@ def classify_snapshot(
         metrics=l5_metrics,
     )
 
-    # ---------------- L6: Streaming Readiness ----------------
+    # ---------------- L6: Preset-Specific Readiness ----------------
     l6_faults: list[FaultItem] = []
     l6_metrics: dict[str, Any] = {
+        "preset": preset.id,
         "xstreaming_path": stream_clients.get("xstreaming_path"),
         "xbox_app_installed": bool(stream_clients.get("xbox_app_installed", False)),
-        "uwp_missing_count": len(uwp_missing),
+        "chiaki_path": stream_clients.get("chiaki_path"),
+        "ps_remote_path": stream_clients.get("ps_remote_path"),
+        "moonlight_path": stream_clients.get("moonlight_path"),
+        "sunshine_path": stream_clients.get("sunshine_path"),
+        "steam_path": stream_clients.get("steam_path"),
+        "uwp_missing_count": len(uwp_missing) if preset.uses_uwp_loopback else 0,
     }
 
-    if cfg.console_profile != "xbox":
+    if not preset.uses_uwp_loopback and not preset.uses_stream_client:
         l6_base_status = Severity.SKIPPED
-        l6_summary = "轻量模式"
-        l6_metrics["skipped_reason"] = f"profile={cfg.console_profile}"
+        l6_summary = "无需串流端" if preset.id == "switch" else "通用模式"
+        l6_metrics["skipped_reason"] = f"preset={preset.id}"
     else:
         l6_base_status = Severity.OK
-        if uwp_missing:
+        if preset.uses_uwp_loopback and uwp_missing:
             l6_faults.append(
                 FaultItem(
                     code="UWP_LOOPBACK_MISSING",
@@ -623,17 +646,27 @@ def classify_snapshot(
                     details={"missing_packages": uwp_missing},
                 )
             )
-        if not stream_clients.get("xstreaming_path") and not stream_clients.get("xbox_app_installed"):
-            l6_faults.append(
-                FaultItem(
-                    code="STREAM_CLIENT_MISSING",
-                    layer="L6",
-                    severity=Severity.WARN,
-                    title="未装串流客户端",
-                    message="建议一键下载官方 XStreaming 开始串流",
-                    fix_action="download-stream",
+        if preset.uses_stream_client and preset.client_fault_code:
+            has_any_client = any(bool(stream_clients.get(k)) for k in preset.client_keys)
+            if not has_any_client:
+                client_copy = {
+                    "STREAM_CLIENT_MISSING": ("未装串流客户端", "建议下载官方 XStreaming 或安装 Xbox 应用"),
+                    "PS_CLIENT_MISSING": ("未装 PS 串流端", "建议安装 Chiaki-ng 或官方 PS Remote Play"),
+                    "HANDHELD_CLIENT_MISSING": ("未装串流服务端", "建议安装 Moonlight / Sunshine 或 Steam"),
+                }
+                ctitle, cmsg = client_copy.get(
+                    preset.client_fault_code, ("未装客户端", "请在首次向导中准备客户端")
                 )
-            )
+                l6_faults.append(
+                    FaultItem(
+                        code=preset.client_fault_code,
+                        layer="L6",
+                        severity=Severity.WARN,
+                        title=ctitle,
+                        message=cmsg,
+                        fix_action="download-stream",
+                    )
+                )
         l6_summary = "已就绪" if not l6_faults else "待准备"
 
     l6 = LayerReport(

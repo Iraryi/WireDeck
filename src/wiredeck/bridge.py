@@ -15,9 +15,11 @@ from pathlib import Path
 from typing import Any, Callable
 
 from wiredeck.actions import SUPPORTED_ACTIONS
+from wiredeck.config import load_config
 from wiredeck.extensions import discover_extensions
 from wiredeck.models import ActionResult, DiagnosticReport
 from wiredeck.paths import AppPaths
+from wiredeck.toolkits import discover_toolkits, run_toolkit
 from wiredeck.version import APP_VERSION
 
 
@@ -124,6 +126,11 @@ class LocalBridgeServer:
                     exts = [m.to_dict() for m in discover_extensions(parent._paths)]
                     self._send_json(200, {"extensions": exts})
                     return
+                if path == "/api/v1/toolkits":
+                    cfg = load_config(parent._paths)
+                    tools = [t.to_dict() for t in discover_toolkits(preset_id=cfg.active_preset, include_common=True)]
+                    self._send_json(200, {"active_preset": cfg.active_preset, "toolkits": tools})
+                    return
                 if path.startswith("/api/v1/jobs/"):
                     job_id = path[len("/api/v1/jobs/") :].strip("/")
                     with parent._lock:
@@ -139,6 +146,19 @@ class LocalBridgeServer:
                 if not self._check_auth():
                     return
                 path = self.path.split("?", 1)[0]
+                if path == "/api/v1/toolkits/run":
+                    try:
+                        length = int(self.headers.get("Content-Length") or 0)
+                        body = self.rfile.read(min(length, 16384)).decode("utf-8") if length > 0 else "{}"
+                        payload = json.loads(body) if body.strip() else {}
+                    except Exception:
+                        self._send_json(400, {"ok": False, "code": "BAD_JSON"})
+                        return
+                    tid = str(payload.get("tool_id") or "").strip()
+                    cfg = load_config(parent._paths)
+                    res = run_toolkit(tid, cfg=cfg)
+                    self._send_json(200 if res.ok else 400, res.to_dict())
+                    return
                 if path != "/api/v1/apply":
                     self._send_json(404, {"ok": False, "code": "NOT_FOUND"})
                     return

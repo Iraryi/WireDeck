@@ -16,6 +16,7 @@ clr_datas, clr_binaries, clr_hidden = collect_all("clr_loader")
 
 gui_datas = [
     (str(SRC / "wiredeck" / "web"), "wiredeck/web"),
+    (str(SRC / "wiredeck" / "toolkits"), "wiredeck/toolkits"),
     (str(ROOT / "assets" / "wiredeck.ico"), "assets"),
     (str(ROOT / "assets" / "logo.svg"), "assets"),
     *wv_datas,
@@ -27,6 +28,8 @@ gui_hidden = [
     "webview.platforms.edgechromium",
     "webview.platforms.winforms",
     "wiredeck.extensions",
+    "wiredeck.presets",
+    "wiredeck.toolkits",
     "wiredeck.bridge",
     *wv_hidden,
     *pn_hidden,
@@ -50,8 +53,14 @@ a_cli = Analysis(
     [str(SRC / "wiredeck" / "cli.py")],
     pathex=[str(SRC)],
     binaries=[],
-    datas=[],
-    hiddenimports=["wiredeck.extensions", "wiredeck.actions", "wiredeck.exporter"],
+    datas=[(str(SRC / "wiredeck" / "toolkits"), "wiredeck/toolkits")],
+    hiddenimports=[
+        "wiredeck.extensions",
+        "wiredeck.presets",
+        "wiredeck.toolkits",
+        "wiredeck.actions",
+        "wiredeck.exporter",
+    ],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

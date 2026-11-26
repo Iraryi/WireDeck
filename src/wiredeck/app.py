@@ -30,6 +30,7 @@ from wiredeck.paths import (
     get_web_dir,
     resolve_app_paths,
 )
+from wiredeck.presets import get_preset, list_presets, normalize_preset_id
 from wiredeck.probes import _ping_peer, collect_system_snapshot
 from wiredeck.ps_runner import is_admin, run_elevated_worker, run_powershell
 from wiredeck.stream_client import (
@@ -37,12 +38,13 @@ from wiredeck.stream_client import (
     fetch_latest_xstreaming_release,
     launch_stream_client,
 )
+from wiredeck.toolkits import discover_toolkits, run_toolkit
 from wiredeck.version import APP_NAME, APP_VERSION, NAT_NAME
 
 
-def build_preview_report(preview_mode: str) -> DiagnosticReport:
+def build_preview_report(preview_mode: str, preset_id: str = "xbox") -> DiagnosticReport:
     """Build deterministic, zero-PII diagnostic reports for clean high-DPI screenshots."""
-    cfg = AppConfig()
+    cfg = AppConfig(active_preset=preset_id)
     base_snap: dict[str, Any] = {
         "os_version": "Windows 11 24H2",
         "is_admin": False,
@@ -82,7 +84,7 @@ def build_preview_report(preview_mode: str) -> DiagnosticReport:
         ],
         "pnp_ethernet_devices": [],
         "ipv4_addresses": [
-            {"interface_alias": "Ethernet", "interface_index": 12, "ip": "192.168.50.2", "prefix_length": 24},
+            {"interface_alias": "Ethernet", "interface_index": 12, "ip": cfg.host_ip, "prefix_length": 24},
             {"interface_alias": "Wi-Fi", "interface_index": 8, "ip": "192.168.1.100", "prefix_length": 24},
         ],
         "default_routes": [
@@ -103,8 +105,23 @@ def build_preview_report(preview_mode: str) -> DiagnosticReport:
         "firewall_rules": {"WireDeck-WinNAT-Allow": True, "WireDeck-Direct-Allow": True},
         "uwp_exempt_packages": [],
         "uwp_missing_packages": [],
-        "stream_clients": {"xstreaming_path": "C:\\Program Files\\XStreaming\\XStreaming.exe", "xbox_app_installed": True},
-        "connectivity": {"peer_reachable": True, "peer_rtt_ms": 0.4, "host_internet_ok": True, "xbox_live_ok": True},
+        "stream_clients": {
+            "xstreaming_path": "C:\\Program Files\\XStreaming\\XStreaming.exe",
+            "xbox_app_installed": True,
+            "chiaki_path": "C:\\Program Files\\chiaki-ng\\chiaki.exe",
+            "ps_remote_path": None,
+            "moonlight_path": "C:\\Program Files\\Moonlight Game Streaming\\Moonlight.exe",
+            "sunshine_path": None,
+            "steam_path": None,
+        },
+        "connectivity": {
+            "peer_reachable": True,
+            "peer_rtt_ms": 0.4,
+            "host_internet_ok": True,
+            "xbox_live_ok": True,
+            "service_endpoint_ok": True,
+            "service_endpoint_status": 200,
+        },
     }
 
     if preview_mode == "breakpoint":
@@ -178,11 +195,20 @@ class WireDeckApi:
             "token": self._bridge.info.token if (bridge_running and self._bridge.info) else "",
             "pending_jobs": self._bridge.list_pending_jobs() if bridge_running else [],
         }
+        active_preset = get_preset(self.cfg.active_preset)
+        show_onboarding = (
+            True
+            if self._preview_state == "onboarding"
+            else (False if self._preview_state else (not self.cfg.onboarding_completed))
+        )
         return {
             "app_name": APP_NAME,
             "app_version": APP_VERSION,
             "is_admin": is_admin(),
             "config": self.cfg.to_dict(),
+            "active_preset": active_preset.to_dict(),
+            "presets_meta": [p.to_dict() for p in list_presets()],
+            "show_onboarding": show_onboarding,
             "paths": self.paths.to_dict(),
             "bridge": bridge_info,
             "preview_view": self._preview_view_name(),
@@ -190,7 +216,7 @@ class WireDeckApi:
 
     def diagnose(self) -> dict[str, Any]:
         if self._preview_state:
-            rep = build_preview_report(self._preview_state)
+            rep = build_preview_report(self._preview_state, preset_id=self.cfg.active_preset)
         else:
             rep = run_diagnosis(
                 self.paths,
@@ -246,49 +272,112 @@ class WireDeckApi:
             return ActionResult(ok=True, code="PREVIEW_ONLY", message="预览模式下不修改本机网络").to_dict()
         return self._execute_or_elevate(action, opts or {}).to_dict()
 
+    def complete_onboarding(self, language: str, preset_id: str) -> dict[str, Any]:
+        """Save initial startup language + chosen preset and mark onboarding complete."""
+        from wiredeck.config import VALID_LANGUAGES
+
+        if language in VALID_LANGUAGES:
+            self.cfg.language = language
+        self.cfg.switch_preset(preset_id)
+        self.cfg.onboarding_completed = True
+        save_config(self.paths, self.cfg)
+        return {"ok": True, "config": self.cfg.to_dict(), "active_preset": get_preset(self.cfg.active_preset).to_dict()}
+
+    def switch_preset(self, preset_id: str) -> dict[str, Any]:
+        """Switch active device preset cleanly without overwriting other presets' settings."""
+        self.cfg.switch_preset(preset_id)
+        save_config(self.paths, self.cfg)
+        return {"ok": True, "config": self.cfg.to_dict(), "active_preset": get_preset(self.cfg.active_preset).to_dict()}
+
     def save_settings(self, patch: dict[str, Any]) -> dict[str, Any]:
-        # Validate IP inputs strictly before saving so users get immediate actionable errors
+        from wiredeck.config import VALID_LANGUAGES, VALID_THEMES
+
+        # Handle preset switch cleanly FIRST so we don't copy old preset IPs onto the newly chosen preset
+        requested_preset = patch.get("active_preset", patch.get("console_profile"))
+        switching_only = requested_preset is not None and normalize_preset_id(requested_preset) != self.cfg.active_preset
+        if switching_only:
+            self.cfg.switch_preset(str(requested_preset))
+
+        if patch.get("language") in VALID_LANGUAGES:
+            self.cfg.language = str(patch["language"])
+        lang = self.cfg.language
+
+        # Validate IP inputs strictly when provided (or for current active preset)
         host_in = str(patch.get("host_ip", self.cfg.host_ip)).strip()
         peer_in = str(patch.get("peer_ip", self.cfg.peer_ip)).strip()
         try:
             host_addr = ipaddress.IPv4Address(host_in)
             peer_addr = ipaddress.IPv4Address(peer_in)
         except ValueError:
+            err_invalid = {
+                "zh-CN": "IPv4 地址格式无效（示例：192.168.50.2）",
+                "zh-TW": "IPv4 位址格式無效（範例：192.168.50.2）",
+                "ja": "IPv4 アドレスの形式が無効です（例：192.168.50.2）",
+                "en": "Invalid IPv4 address format (e.g. 192.168.50.2)",
+            }
             return {
                 "ok": False,
                 "code": "INVALID_IP",
-                "message": "IPv4 地址格式无效（示例：192.168.50.2）"
-                if self.cfg.language == "zh-CN"
-                else "Invalid IPv4 address format (e.g. 192.168.50.2)",
+                "message": err_invalid.get(lang, err_invalid["en"]),
             }
         if host_addr == peer_addr:
+            err_same = {
+                "zh-CN": "电脑有线 IP 与设备 IP 不能相同",
+                "zh-TW": "電腦有線 IP 與裝置 IP 不能相同",
+                "ja": "PC の有線 IP とデバイスの IP は同じにできません",
+                "en": "Host IP and Device IP cannot be identical",
+            }
             return {
                 "ok": False,
                 "code": "SAME_IP",
-                "message": "电脑有线 IP 与游戏机 IP 不能相同"
-                if self.cfg.language == "zh-CN"
-                else "Host IP and Console IP cannot be identical",
+                "message": err_same.get(lang, err_same["en"]),
             }
         net_host = ipaddress.IPv4Interface(f"{host_addr}/{self.cfg.prefix_length}").network
         if peer_addr not in net_host:
+            err_sub = {
+                "zh-CN": f"设备 IP 必须与电脑在同网段（{net_host}）",
+                "zh-TW": f"裝置 IP 必須與電腦在同網段（{net_host}）",
+                "ja": f"デバイス IP は PC と同じサブネットである必要があります（{net_host}）",
+                "en": f"Device IP must be in the same subnet ({net_host})",
+            }
             return {
                 "ok": False,
                 "code": "SUBNET_MISMATCH",
-                "message": f"游戏机 IP 必须与电脑在同网段（{net_host}）"
-                if self.cfg.language == "zh-CN"
-                else f"Console IP must be in the same subnet ({net_host})",
+                "message": err_sub.get(lang, err_sub["en"]),
             }
 
-        merged = self.cfg.to_dict()
-        for k in ("theme", "language", "console_profile", "ethernet_interface", "uplink_interface", "host_ip", "peer_ip"):
-            if k in patch:
-                merged[k] = patch[k]
-        from wiredeck.config import _normalize_config
+        if patch.get("theme") in VALID_THEMES:
+            self.cfg.theme = str(patch["theme"])
+        if "ethernet_interface" in patch:
+            self.cfg.ethernet_interface = str(patch["ethernet_interface"] or "")
+        if "uplink_interface" in patch:
+            self.cfg.uplink_interface = str(patch["uplink_interface"] or "")
+        if "onboarding_completed" in patch:
+            self.cfg.onboarding_completed = bool(patch["onboarding_completed"])
 
-        self.cfg = _normalize_config(merged)
+        if "host_ip" in patch:
+            self.cfg.host_ip = str(host_addr)
+        if "peer_ip" in patch:
+            self.cfg.peer_ip = str(peer_addr)
+        if "dns_servers" in patch:
+            raw_dns = patch["dns_servers"]
+            if isinstance(raw_dns, str):
+                parts = [p.strip() for p in raw_dns.replace("/", ",").replace(" ", ",").split(",") if p.strip()]
+                self.cfg.dns_servers = parts
+            elif isinstance(raw_dns, list):
+                self.cfg.dns_servers = raw_dns
+
         save_config(self.paths, self.cfg)
         _set_titlebar_theme(f"{APP_NAME} v{APP_VERSION}", self.cfg.theme == "dark")
-        return {"ok": True, "config": self.cfg.to_dict()}
+        return {"ok": True, "config": self.cfg.to_dict(), "active_preset": get_preset(self.cfg.active_preset).to_dict()}
+
+    def list_toolkits(self) -> list[dict[str, Any]]:
+        """List bundled read-only AI toolkits for the active preset + universal common tools."""
+        return [t.to_dict() for t in discover_toolkits(preset_id=self.cfg.active_preset, include_common=True)]
+
+    def run_toolkit(self, tool_id: str) -> dict[str, Any]:
+        """Execute a bundled read-only AI toolkit script and return JSON result."""
+        return run_toolkit(tool_id, cfg=self.cfg).to_dict()
 
     def ping_peer_now(self) -> dict[str, Any]:
         """Fast <1s direct peer ping for Step 4 connectivity verification."""
@@ -299,7 +388,7 @@ class WireDeckApi:
 
     def export_for_ai(self) -> dict[str, Any]:
         report = self._last_report or (
-            build_preview_report(self._preview_state)
+            build_preview_report(self._preview_state, preset_id=self.cfg.active_preset)
             if self._preview_state
             else run_diagnosis(self.paths, self.cfg, include_extensions=True, probe_network=True, snapshot_fn=self._snapshot_fn)
         )
@@ -415,6 +504,16 @@ class WireDeckApi:
         return {"ok": True, "job": job.to_dict() if job else None}
 
     def download_xstreaming(self) -> dict[str, Any]:
+        preset = get_preset(self.cfg.active_preset)
+        if preset.id != "xbox":
+            if preset.official_client_url:
+                webbrowser.open(preset.official_client_url)
+                return {
+                    "ok": True,
+                    "code": "OPENED_RELEASE_PAGE",
+                    "message": f"已打开 {preset.official_client_name} 官方发布页",
+                }
+            return {"ok": True, "code": "NO_CLIENT_NEEDED", "message": "当前预设无需下载额外串流端"}
         info = fetch_latest_xstreaming_release()
         if not info.ok or not info.download_url:
             webbrowser.open(info.release_page_url)
@@ -430,7 +529,7 @@ class WireDeckApi:
             return {"ok": False, "code": "DOWNLOAD_FAILED", "message": f"下载校验失败（{exc}），已打开官方发布页"}
 
     def launch_stream_client(self) -> dict[str, Any]:
-        return launch_stream_client().to_dict()
+        return launch_stream_client(preset_id=self.cfg.active_preset).to_dict()
 
     def open_folder(self, kind: str) -> dict[str, Any]:
         mapping = {
@@ -575,9 +674,14 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="WireDeck", add_help=True)
     parser.add_argument(
         "--preview-state",
-        choices=["ready", "breakpoint", "wizard", "ai", "settings"],
+        choices=["ready", "breakpoint", "wizard", "ai", "settings", "onboarding"],
         default=None,
         help="Open GUI in deterministic read-only preview mode",
+    )
+    parser.add_argument(
+        "--preset",
+        default=None,
+        help="Override active preset in preview mode",
     )
     parser.add_argument(
         "--theme",
@@ -587,7 +691,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--lang",
-        choices=["zh-CN", "en"],
+        choices=["zh-CN", "zh-TW", "en", "ja"],
         default=None,
         help="Override language in preview mode",
     )
@@ -624,6 +728,8 @@ def main(argv: list[str] | None = None) -> int:
     import webview
 
     api = WireDeckApi(preview_state=args.preview_state)
+    if args.preset:
+        api.cfg.switch_preset(args.preset)
     if args.theme:
         api.cfg.theme = args.theme
     if args.lang:

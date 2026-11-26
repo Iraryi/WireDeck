@@ -94,12 +94,12 @@
           <div class="group-box" id="diagTable"></div>
         </section>
 
-        <!-- VIEW 2: 4-STEP SETUP WIZARD -->
+        <!-- VIEW 2: PRESET-TAILORED SETUP WIZARD -->
         <section class="view" id="viewWizard">
           <div class="page-head">
             <div>
               <div class="page-title" data-i18n="wizard_title">首次准备向导</div>
-              <div class="page-sub" data-i18n="wizard_sub">已达标步骤自动绿灯，只需处理剩余项</div>
+              <div class="page-sub" data-i18n="wizard_sub">已按当前设备预设裁剪步骤，绿灯项可直接跳过</div>
             </div>
             <button class="btn btn-sm" id="btnWizRefresh" type="button" data-i18n="btn_refresh">刷新</button>
           </div>
@@ -107,7 +107,7 @@
           <div class="group-box">
             <div class="list-row" id="wizStep1">
               <div class="list-row-col">
-                <div class="row-head"><span id="wizS1Badge" class="sev-text idle">○ 待命</span><span data-i18n="wiz_s1_title">1. 有线网口体检</span></div>
+                <div class="row-head"><span id="wizS1Badge" class="sev-text idle">○ 待命</span><span id="wizS1Title">1. 有线网口体检</span></div>
                 <div class="row-desc" data-i18n="wiz_s1_desc">唤醒禁用的网卡 / PCIe 通道，关闭 EEE 节能防卡顿</div>
               </div>
               <div class="row-actions">
@@ -117,7 +117,7 @@
 
             <div class="list-row" id="wizStep2">
               <div class="list-row-col">
-                <div class="row-head"><span id="wizS2Badge" class="sev-text idle">○ 待命</span><span data-i18n="wiz_s2_title">2. 解除代理拦截</span></div>
+                <div class="row-head"><span id="wizS2Badge" class="sev-text idle">○ 待命</span><span id="wizS2Title">2. 解除代理拦截</span></div>
                 <div class="row-desc" data-i18n="wiz_s2_desc">为微软商店与 Xbox 写入 UWP 回环豁免</div>
               </div>
               <div class="row-actions">
@@ -127,8 +127,8 @@
 
             <div class="list-row" id="wizStep3">
               <div class="list-row-col">
-                <div class="row-head"><span id="wizS3Badge" class="sev-text idle">○ 待命</span><span data-i18n="wiz_s3_title">3. 准备串流客户端</span></div>
-                <div class="row-desc" id="wizS3Desc" data-i18n="wiz_s3_desc">检测本机 XStreaming / Xbox 应用，或官方校验下载</div>
+                <div class="row-head"><span id="wizS3Badge" class="sev-text idle">○ 待命</span><span id="wizS3Title">3. 准备串流客户端</span></div>
+                <div class="row-desc" id="wizS3Desc" data-i18n="wiz_s3_desc">检测本机串流客户端或官方校验下载</div>
               </div>
               <div class="row-actions">
                 <button class="btn btn-sm" id="btnWizDownload" type="button" data-i18n="wiz_s3_btn">下载并校验</button>
@@ -139,22 +139,23 @@
             <div id="wizStep4">
               <div class="list-row" style="border-bottom:none;">
                 <div class="list-row-col">
-                  <div class="row-head"><span id="wizS4Badge" class="sev-text idle">○ 待命</span><span data-i18n="wiz_s4_title">4. 主机静态参数 & 连通验收</span></div>
-                  <div class="row-desc" data-i18n="wiz_s4_desc">在游戏机网络设置中一次性填入以下 4 项</div>
+                  <div class="row-head"><span id="wizS4Badge" class="sev-text idle">○ 待命</span><span id="wizS4Title">4. 设备静态参数 & 连通验收</span></div>
+                  <div class="row-desc" id="wizS4Desc" data-i18n="wiz_peer_desc">在目标设备的有线网络设置中一次性填入以下 4 项</div>
                 </div>
                 <div class="row-actions">
+                  <button class="btn btn-sm" id="btnWizCopyNmcli" type="button" style="display:none" data-i18n="wiz_copy_nmcli">复制 Linux 命令</button>
                   <button class="btn btn-sm" id="btnWizCopyIp" type="button" data-i18n="wiz_copy_params">复制参数</button>
                   <button class="btn btn-sm btn-primary" id="btnWizTestPeer" type="button" data-i18n="wiz_test_peer">测试连通</button>
                 </div>
               </div>
               <div class="peer-ping-result" id="peerPingResult"></div>
               <div class="ip-box">
-                <div><div class="ip-k">IP 地址</div><div class="ip-v mono" id="cardPeerIp">192.168.50.1</div></div>
-                <div><div class="ip-k">子网掩码</div><div class="ip-v mono" id="cardMask">255.255.255.0</div></div>
-                <div><div class="ip-k">默认网关</div><div class="ip-v mono" id="cardHostIp">192.168.50.2</div></div>
-                <div><div class="ip-k">DNS</div><div class="ip-v mono" id="cardDns">223.5.5.5 / 8.8.8.8</div></div>
+                <div><div class="ip-k" data-i18n="ip_label_addr">IP 地址</div><div class="ip-v mono" id="cardPeerIp">192.168.50.1</div></div>
+                <div><div class="ip-k" data-i18n="ip_label_mask">子网掩码</div><div class="ip-v mono" id="cardMask">255.255.255.0</div></div>
+                <div><div class="ip-k" data-i18n="ip_label_gw">默认网关</div><div class="ip-v mono" id="cardHostIp">192.168.50.2</div></div>
+                <div><div class="ip-k" data-i18n="ip_label_dns">DNS</div><div class="ip-v mono" id="cardDns">223.5.5.5 / 8.8.8.8</div></div>
               </div>
-              <div class="note-line" data-i18n="wiz_headless_tip">无显示器首次配置：可先借屏幕或采集卡 5 分钟打开「启用远程功能」。</div>
+              <div class="note-line" id="wizTipLine" data-i18n="wiz_tip_xbox"></div>
             </div>
           </div>
         </section>
@@ -195,6 +196,12 @@
           </div>
 
           <div class="sec-row">
+            <span class="sec-label" style="margin:0;" data-i18n="ai_toolkits_heading">内置 AI 工具库（当前预设 + 通用环境）</span>
+            <span class="ext-tag" id="toolkitCountTag">0</span>
+          </div>
+          <div class="group-box compact-scroll" id="toolkitList"></div>
+
+          <div class="sec-row">
             <span class="sec-label" style="margin:0;" data-i18n="ai_ext_heading">已加载的 AI 扩展</span>
             <button class="btn btn-sm" id="btnCreateSampleExt" type="button" data-i18n="ai_create_sample">创建示例扩展</button>
           </div>
@@ -205,7 +212,7 @@
             <div class="list-row">
               <div class="list-row-col">
                 <div class="row-head" data-i18n="ai_cli_title">无头 CLI（供终端 / DSH 直接调用）</div>
-                <div class="row-desc mono">wiredeck-cli.exe diagnose --json &nbsp;|&nbsp; apply &lt;action&gt; --json</div>
+                <div class="row-desc mono">wiredeck-cli.exe diagnose --json &nbsp;|&nbsp; toolkit list --json</div>
               </div>
               <button class="btn btn-sm" id="btnCopyCliCmd" type="button" data-i18n="ai_copy_cli">复制诊断命令</button>
             </div>
@@ -229,59 +236,75 @@
           </details>
         </section>
 
-        <!-- VIEW 4: SETTINGS (Native Page, no cramped modal) -->
-        <section class="view" id="viewSettings">
+        <!-- VIEW 4: SETTINGS (Shared Host vs Independent Preset Config) -->
+        <section class="view view-compact" id="viewSettings">
           <div class="page-head">
             <div>
               <div class="page-title" data-i18n="settings_title">设置</div>
-              <div class="page-sub" data-i18n="settings_sub">配置保存在本地数据目录，卸载时默认保留</div>
+              <div class="page-sub" data-i18n="settings_sub">各设备预设的参数相互独立保存，共享本机环境</div>
             </div>
             <button class="btn btn-sm btn-primary" id="btnSaveSettings" type="button" data-i18n="btn_save">保存</button>
           </div>
 
+          <div class="sec-label" data-i18n="set_sec_shared">本机共享环境</div>
           <div class="group-box">
-            <div class="setting-row">
+            <div class="setting-row compact">
               <span class="setting-label" data-i18n="set_theme">外观主题</span>
               <select id="setTheme">
                 <option value="light" data-i18n="set_theme_light">浅色（Windows 经典）</option>
                 <option value="dark" data-i18n="set_theme_dark">深色（中性灰）</option>
               </select>
             </div>
-            <div class="setting-row">
+            <div class="setting-row compact">
               <span class="setting-label" data-i18n="set_language">界面语言</span>
               <select id="setLanguage">
                 <option value="zh-CN">简体中文</option>
+                <option value="zh-TW">繁體中文</option>
                 <option value="en">English</option>
+                <option value="ja">日本語</option>
               </select>
             </div>
-            <div class="setting-row">
-              <span class="setting-label" data-i18n="set_profile">游戏机档案</span>
-              <select id="setProfile">
-                <option value="xbox">Xbox Series X|S</option>
-                <option value="ps5">PS5（轻量）</option>
-                <option value="generic">Generic / 通用主机</option>
-              </select>
-            </div>
-            <div class="setting-row">
+            <div class="setting-row compact">
               <span class="setting-label" data-i18n="set_eth">有线网卡</span>
               <select id="setEth">
                 <option value="" data-i18n="set_eth_auto">自动识别（推荐）</option>
               </select>
             </div>
-            <div class="setting-row">
+          </div>
+
+          <div class="sec-label" data-i18n="set_sec_preset">当前设备预设（独立保存）</div>
+          <div class="group-box">
+            <div class="setting-row compact">
+              <span class="setting-label" data-i18n="set_profile">设备预设</span>
+              <select id="setProfile">
+                <option value="xbox" data-i18n="preset_xbox_name">Xbox Series X|S / One</option>
+                <option value="playstation" data-i18n="preset_playstation_name">PlayStation 5 / PS4</option>
+                <option value="switch" data-i18n="preset_switch_name">Nintendo Switch / Switch 2</option>
+                <option value="handheld" data-i18n="preset_handheld_name">Steam Deck / ROG 掌机</option>
+                <option value="other" data-i18n="preset_other_name">其他有线设备（Linux / 树莓派）</option>
+              </select>
+            </div>
+            <div class="setting-row compact">
               <span class="setting-label" data-i18n="set_host_ip">电脑有线 IP</span>
               <input id="setHostIp" class="mono" value="192.168.50.2" />
             </div>
-            <div class="setting-row">
-              <span class="setting-label" data-i18n="set_peer_ip">游戏机静态 IP</span>
+            <div class="setting-row compact">
+              <span class="setting-label" data-i18n="set_peer_ip">设备静态 IP</span>
               <input id="setPeerIp" class="mono" value="192.168.50.1" />
+            </div>
+            <div class="setting-row compact">
+              <span class="setting-label" data-i18n="set_dns">DNS 服务器</span>
+              <input id="setDns" class="mono" value="223.5.5.5, 8.8.8.8" />
             </div>
           </div>
 
           <div class="sec-label" data-i18n="set_maint">网卡维护与目录</div>
           <div class="group-box">
-            <div class="setting-row">
-              <button class="btn btn-sm btn-danger" id="btnResetNic" type="button" data-i18n="set_reset_nic">恢复网卡出厂 DHCP</button>
+            <div class="setting-row compact">
+              <div class="row-actions">
+                <button class="btn btn-sm btn-danger" id="btnResetNic" type="button" data-i18n="set_reset_nic">恢复网卡出厂 DHCP</button>
+                <button class="btn btn-sm" id="btnRerunOnboarding" type="button" data-i18n="set_rerun_onboarding">重新运行开局设置</button>
+              </div>
               <div class="row-actions">
                 <button class="btn btn-sm" id="btnOpenLogs" type="button" data-i18n="set_open_logs">日志目录</button>
                 <button class="btn btn-sm" id="btnOpenData" type="button" data-i18n="set_open_data">数据目录</button>
@@ -295,19 +318,48 @@
     <!-- Classic Desktop Bottom Status Bar -->
     <footer class="statusbar">
       <div class="sb-group">
-        <span id="sbProfile">Xbox Series X|S</span>
+        <button class="sb-link" id="sbProfile" type="button">Xbox Series X|S / One</button>
         <span class="sb-sep">|</span>
         <span class="mono" id="sbSubnet">192.168.50.2 → 192.168.50.1</span>
       </div>
       <div class="sb-group">
         <button class="sb-link" id="btnLaunchStream" type="button" data-i18n="footer_launch">启动串流端</button>
-        <span class="sb-sep">|</span>
+        <span class="sb-sep" id="sbLaunchSep">|</span>
         <button class="sb-link" id="btnCopyAiQuick" type="button" data-i18n="footer_copy_ai">复制现场给 AI</button>
       </div>
     </footer>
   </div>
 
-  <!-- Confirm Foreign NetNat Modal -->
+  <!-- Startup Initial Setup Modal (First Launch / Re-run Onboarding) -->
+  <div class="modal-backdrop" id="onboardingModal">
+    <div class="modal modal-wide">
+      <div>
+        <div class="modal-title" data-i18n="onb_title">欢迎使用 WireDeck</div>
+        <div class="page-sub" data-i18n="onb_sub">先选好界面语言与要直连的设备预设，各预设配置相互独立（稍后可随时在设置中切换）</div>
+      </div>
+
+      <div class="onb-section">
+        <div class="onb-label" data-i18n="onb_lang">界面语言</div>
+        <div class="lang-pills" id="onbLangRow">
+          <button type="button" class="lang-pill active" data-onb-lang="zh-CN">简体中文</button>
+          <button type="button" class="lang-pill" data-onb-lang="zh-TW">繁體中文</button>
+          <button type="button" class="lang-pill" data-onb-lang="en">English</button>
+          <button type="button" class="lang-pill" data-onb-lang="ja">日本語</button>
+        </div>
+      </div>
+
+      <div class="onb-section">
+        <div class="onb-label" data-i18n="onb_preset">选择设备预设</div>
+        <div class="preset-grid" id="onbPresetGrid"></div>
+      </div>
+
+      <div class="modal-actions">
+        <button class="btn btn-primary" id="btnOnbStart" type="button" data-i18n="onb_start">开始使用</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Confirm Foreign NetNat / Reset NIC Modal -->
   <div class="modal-backdrop" id="confirmModal">
     <div class="modal">
       <div class="modal-title" id="confirmTitle" data-i18n="confirm_netnat_title">确认清理其他 NAT 规则</div>
@@ -319,11 +371,11 @@
     </div>
   </div>
 
-  <!-- Node Detail Dialog -->
+  <!-- Node Detail / Toolkit Output Dialog -->
   <div class="modal-backdrop" id="detailModal">
-    <div class="modal">
+    <div class="modal modal-detail">
       <div class="modal-title" id="detailTitle"></div>
-      <div class="modal-body" id="detailBody"></div>
+      <div class="modal-body detail-scroll" id="detailBody"></div>
       <div class="modal-actions">
         <button class="btn btn-sm" id="btnCopyDetail" type="button" data-i18n="btn_copy_detail">复制详情</button>
         <button class="btn btn-sm btn-primary" id="btnCloseDetail" type="button" data-i18n="btn_close">关闭</button>

@@ -28,7 +28,7 @@ wiredeck = "wiredeck.app:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-wiredeck = ["web/*"]
+wiredeck = ["web/*", "toolkits/*", "toolkits/*/*"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

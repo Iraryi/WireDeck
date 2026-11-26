@@ -1,0 +1,181 @@
+{
+  "schema": "wiredeck-toolkits/v1",
+  "tools": [
+    {
+      "id": "common/probe-route-table",
+      "scope": "common",
+      "script": "common/probe-route-table.ps1",
+      "name_zh": "路由表与 TUN 劫持快照",
+      "name_en": "Route Table & TUN Audit",
+      "description_zh": "导出 IPv4 默认路由、跃点数及疑似 VPN TUN 接管详情",
+      "description_en": "Export IPv4 default routes, interface metrics, and VPN TUN takeovers",
+      "timeout_sec": 10,
+      "read_only": true
+    },
+    {
+      "id": "common/probe-nic-pcie-tree",
+      "scope": "common",
+      "script": "common/probe-nic-pcie-tree.ps1",
+      "name_zh": "有线网卡与 PCIe 拓扑",
+      "name_en": "Wired NIC & PCIe Tree",
+      "description_zh": "读取物理有线网卡状态、驱动版本、速率及节能高级属性",
+      "description_en": "Inspect physical wired NIC status, driver version, speed, and power-save flags",
+      "timeout_sec": 10,
+      "read_only": true
+    },
+    {
+      "id": "common/probe-udp-ports",
+      "scope": "common",
+      "script": "common/probe-udp-ports.ps1",
+      "name_zh": "关键端口占用排查",
+      "name_en": "Critical Port Occupancy Audit",
+      "description_zh": "检查 53/67 及主流串流端口监听进程与服务归属",
+      "description_en": "Check owning processes/services for UDP 53/67 and console streaming ports",
+      "timeout_sec": 10,
+      "read_only": true
+    },
+    {
+      "id": "common/probe-mtu-path",
+      "scope": "common",
+      "script": "common/probe-mtu-path.ps1",
+      "name_zh": "上游路径 MTU 探测",
+      "name_en": "Upstream Path MTU Probe",
+      "description_zh": "发送不分片回显包探测公网路径最大 MTU，排查校园网/光猫分片丢包",
+      "description_en": "Probe path MTU with DF pings to locate campus/PPPoE fragmentation loss",
+      "timeout_sec": 12,
+      "read_only": true
+    },
+    {
+      "id": "common/probe-winnat-firewall",
+      "scope": "common",
+      "script": "common/probe-winnat-firewall.ps1",
+      "name_zh": "WinNAT 与防火墙明细",
+      "name_en": "WinNAT & Firewall Details",
+      "description_zh": "列出所有 NetNat 实例、IPv4 转发状态及 WireDeck 防火墙规则",
+      "description_en": "Dump all NetNat instances, IPv4 forwarding flags, and WireDeck firewall rules",
+      "timeout_sec": 10,
+      "read_only": true
+    },
+    {
+      "id": "common/bench-peer-jitter",
+      "scope": "common",
+      "script": "common/bench-peer-jitter.ps1",
+      "name_zh": "直连链路抖动快测",
+      "name_en": "Direct Link Jitter Benchmark",
+      "description_zh": "向目标主机发送 8 次直连探测包，统计丢包率、均值与抖动",
+      "description_en": "Send 8 direct pings to the peer IP and measure loss, avg RTT, and jitter",
+      "timeout_sec": 10,
+      "read_only": true
+    },
+    {
+      "id": "xbox/check-xbox-endpoints",
+      "scope": "xbox",
+      "script": "xbox/check-xbox-endpoints.ps1",
+      "name_zh": "Xbox Live 端点全测",
+      "name_en": "Xbox Live Endpoints Check",
+      "description_zh": "逐项检测 Xbox 认证、XSTS、Store 与微软登录域名解析和 HTTPS 耗时",
+      "description_en": "Test DNS and HTTPS reachability for Xbox Auth, XSTS, Store, and MS Login",
+      "timeout_sec": 14,
+      "read_only": true
+    },
+    {
+      "id": "xbox/audit-uwp-loopback",
+      "scope": "xbox",
+      "script": "xbox/audit-uwp-loopback.ps1",
+      "name_zh": "UWP 回环豁免明细",
+      "name_en": "UWP Loopback Exemption Audit",
+      "description_zh": "核对本机微软商店/Xbox/认证 UWP 包的 AppContainer 回环豁免列表",
+      "description_en": "Verify AppContainer loopback exemptions for installed Store/Xbox UWP packages",
+      "timeout_sec": 10,
+      "read_only": true
+    },
+    {
+      "id": "xbox/check-xbox-ports",
+      "scope": "xbox",
+      "script": "xbox/check-xbox-ports.ps1",
+      "name_zh": "Xbox 串流端口检查",
+      "name_en": "Xbox Streaming Ports Check",
+      "description_zh": "排查 UDP 3074 / 5050 / 9002 端口本机占用情况",
+      "description_en": "Check local listeners on Xbox Live and Remote Play ports (3074/5050/9002)",
+      "timeout_sec": 8,
+      "read_only": true
+    },
+    {
+      "id": "playstation/check-psn-endpoints",
+      "scope": "playstation",
+      "script": "playstation/check-psn-endpoints.ps1",
+      "name_zh": "PSN 认证与商店端点检测",
+      "name_en": "PSN Auth & Store Endpoints",
+      "description_zh": "实测 PlayStation 认证、账号与商店域名的解析与 HTTPS 连通耗时",
+      "description_en": "Probe DNS and HTTPS reachability for PSN auth, account, and store endpoints",
+      "timeout_sec": 14,
+      "read_only": true
+    },
+    {
+      "id": "playstation/check-ps-remote-ports",
+      "scope": "playstation",
+      "script": "playstation/check-ps-remote-ports.ps1",
+      "name_zh": "PS 串流 / Chiaki 端口检查",
+      "name_en": "PS Remote / Chiaki Ports Check",
+      "description_zh": "排查 PS Remote Play 与 Chiaki-ng 所需端口（9295-9297/9302/987）占用",
+      "description_en": "Check local listeners on PS Remote Play / Chiaki-ng ports (9295-9297/9302/987)",
+      "timeout_sec": 8,
+      "read_only": true
+    },
+    {
+      "id": "switch/check-nintendo-endpoints",
+      "scope": "switch",
+      "script": "switch/check-nintendo-endpoints.ps1",
+      "name_zh": "任天堂网络连通端点检测",
+      "name_en": "Nintendo Connectivity Check",
+      "description_zh": "测试 ctest.cdn.nintendo.net 与 conntest.nintendowifi.net 解析和响应",
+      "description_en": "Probe ctest.cdn.nintendo.net and conntest.nintendowifi.net DNS & HTTP status",
+      "timeout_sec": 12,
+      "read_only": true
+    },
+    {
+      "id": "switch/bench-switch-dns",
+      "scope": "switch",
+      "script": "switch/bench-switch-dns.ps1",
+      "name_zh": "Switch 常用 DNS 测速对比",
+      "name_en": "Switch DNS Latency Benchmark",
+      "description_zh": "对比 223.5.5.5 / 119.29.29.29 / 8.8.8.8 / 168.126.63.1 解析任天堂域名的速度",
+      "description_en": "Benchmark 223.5.5.5, 119.29.29.29, 8.8.8.8, and 168.126.63.1 for Nintendo DNS",
+      "timeout_sec": 14,
+      "read_only": true
+    },
+    {
+      "id": "handheld/check-stream-host-ports",
+      "scope": "handheld",
+      "script": "handheld/check-stream-host-ports.ps1",
+      "name_zh": "Sunshine / Steam 串流端口检查",
+      "name_en": "Sunshine / Steam Stream Ports",
+      "description_zh": "检查本机 Sunshine/Moonlight（47984-48000）与 Steam 串流端口监听状态",
+      "description_en": "Check Sunshine/Moonlight (47984-48000) and Steam Remote Play listeners",
+      "timeout_sec": 8,
+      "read_only": true
+    },
+    {
+      "id": "handheld/emit-linux-nmcli-script",
+      "scope": "handheld",
+      "script": "handheld/emit-linux-nmcli-script.ps1",
+      "name_zh": "生成 Steam Deck / Linux 直连命令",
+      "name_en": "Generate Steam Deck / Linux Script",
+      "description_zh": "按当前子网自动生成 SteamOS / Linux 掌机的 nmcli 与策略路由命令",
+      "description_en": "Emit ready-to-paste nmcli and policy-routing commands for SteamOS / Linux",
+      "timeout_sec": 6,
+      "read_only": true
+    },
+    {
+      "id": "other/emit-peer-config-snippets",
+      "scope": "other",
+      "script": "other/emit-peer-config-snippets.ps1",
+      "name_zh": "生成三端对端静态 IP 命令",
+      "name_en": "Generate Cross-OS Peer Snippets",
+      "description_zh": "按当前子网生成 Linux / macOS / Windows 对端一键配置静态 IP 命令",
+      "description_en": "Generate static IPv4 configuration commands for Linux, macOS, and Windows peers",
+      "timeout_sec": 6,
+      "read_only": true
+    }
+  ]
+}

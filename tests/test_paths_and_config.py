@@ -88,7 +88,7 @@ def test_config_roundtrip_and_corrupt_recovery(tmp_path: Path):
     save_config(p, cfg)
     reloaded = load_config(p)
     assert reloaded.language == "en"
-    assert reloaded.console_profile == "ps5"
+    assert reloaded.console_profile == "playstation"
     assert reloaded.ethernet_interface == "以太网"
 
     # Corrupt config recovery backs up broken file and returns clean defaults

@@ -342,7 +342,14 @@ window.WIREDECK_I18N = {
     "guide_c_ot_h_1": "在目标设备 Wi-Fi 中连接下方 5 GHz 热点名并输入密码（保持 DHCP 自动获取 IP）",
     "guide_c_ot_h_2": "设备列表中出现接入 IP 后，点击下一步测试延迟",
     "guide_c_ot_l_1": "确认笔记本与目标设备处于同一个 5 GHz 路由器子网下",
-    "guide_c_ot_l_2": "查看目标设备的局域网 IPv4，填入下方并点保存"
+    "guide_c_ot_l_2": "查看目标设备的局域网 IPv4，填入下方并点保存",
+    "guide_entry_title": "开玩入口 & 桌面一键启动",
+    "guide_entry_desc_client": "可直接进入 {client}，或生成桌面快捷方式：双击即自动开网并进端。",
+    "guide_entry_desc_noclient": "当前设备无需电脑串流端，可在桌面建一个一键开关本模式的快捷方式。",
+    "guide_btn_create_shortcut": "创建桌面快捷方式",
+    "guide_btn_shortcut_done": "✓ 已建桌面快捷方式",
+    "guide_btn_enter_client": "进入 {client}",
+    "guide_btn_get_client": "获取 {client}"
   },
   "zh-TW": {
     "nav_home": "有線直連",
@@ -687,7 +694,14 @@ window.WIREDECK_I18N = {
     "guide_c_ot_h_1": "於目標裝置 Wi-Fi 連接下方 5 GHz 熱點名稱並輸入密碼（維持 DHCP 自動取得 IP）",
     "guide_c_ot_h_2": "裝置清單出現連入 IP 後，點擊下一步測試延遲",
     "guide_c_ot_l_1": "確認筆電與目標裝置位於同一個 5 GHz 路由器子網路下",
-    "guide_c_ot_l_2": "查詢目標裝置的區網 IPv4，填入下方並點儲存"
+    "guide_c_ot_l_2": "查詢目標裝置的區網 IPv4，填入下方並點儲存",
+    "guide_entry_title": "開玩入口 & 桌面一鍵啟動",
+    "guide_entry_desc_client": "可直接進入 {client}，或建立桌面捷徑：雙擊自動開啟連線並啟動串流端。",
+    "guide_entry_desc_noclient": "此裝置無需電腦串流端，可在桌面建立一鍵切換此連線模式的捷徑。",
+    "guide_btn_create_shortcut": "建立桌面捷徑",
+    "guide_btn_shortcut_done": "✓ 已建桌面捷徑",
+    "guide_btn_enter_client": "進入 {client}",
+    "guide_btn_get_client": "取得 {client}"
   },
   "en": {
     "nav_home": "Wired Direct",
@@ -1032,7 +1046,14 @@ window.WIREDECK_I18N = {
     "guide_c_ot_h_1": "Join the 5 GHz SSID & password below on your device (DHCP Auto)",
     "guide_c_ot_h_2": "Once the device IP appears in Hotspot clients, move to Next to verify ping",
     "guide_c_ot_l_1": "Ensure laptop and target device are on the same 5 GHz router subnet",
-    "guide_c_ot_l_2": "Enter the target device's LAN IPv4 below and click Save"
+    "guide_c_ot_l_2": "Enter the target device's LAN IPv4 below and click Save",
+    "guide_entry_title": "Play Entry & Desktop One-Click Shortcut",
+    "guide_entry_desc_client": "Launch {client} now, or create a desktop shortcut that enables this mode and opens {client} in 1 click.",
+    "guide_entry_desc_noclient": "No PC stream app is required; create a desktop shortcut to activate this mode in 1 click.",
+    "guide_btn_create_shortcut": "Create Shortcut",
+    "guide_btn_shortcut_done": "✓ Shortcut Created",
+    "guide_btn_enter_client": "Launch {client}",
+    "guide_btn_get_client": "Get {client}"
   },
   "ja": {
     "nav_home": "有線直結",
@@ -1377,6 +1398,13 @@ window.WIREDECK_I18N = {
     "guide_c_ot_h_1": "対象機器から下の 5 GHz SSID とパスワードに接続（DHCP 自動）",
     "guide_c_ot_h_2": "クライアント欄に IP が表示されたら次へ進んで疎通確認",
     "guide_c_ot_l_1": "PC と対象機器が同じ 5 GHz ルーター配下にあることを確認",
-    "guide_c_ot_l_2": "対象機器の LAN IPv4 を下に入力して保存"
+    "guide_c_ot_l_2": "対象機器の LAN IPv4 を下に入力して保存",
+    "guide_entry_title": "プレイ入口 & デスクトップ一発起動",
+    "guide_entry_desc_client": "今すぐ {client} を開くか、ワンクリックで接続準備＋{client} 起動するショートカットを作成できます。",
+    "guide_entry_desc_noclient": "PC 配信アプリ不要です。このモードを即座に有効化するデスクトップショートカットを作成できます。",
+    "guide_btn_create_shortcut": "ショートカット作成",
+    "guide_btn_shortcut_done": "✓ 作成済み",
+    "guide_btn_enter_client": "{client} を開く",
+    "guide_btn_get_client": "{client} を入手"
   }
 };

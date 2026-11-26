@@ -508,3 +508,19 @@ def test_fetch_latest_xstreaming_release_handles_github_500_gracefully():
     assert info.ok is False
     assert "500" in info.error or "GitHub" in info.error
     assert info.release_page_url.startswith("https://github.com/")
+
+
+def test_create_play_shortcut_writes_real_lnk_inside_target_dir(tmp_path: Path):
+    from wiredeck.config import AppConfig
+    from wiredeck.paths import resolve_app_paths
+    from wiredeck.stream_client import build_play_shortcut_name, create_play_shortcut
+
+    paths = resolve_app_paths(tmp_path / "app", local_appdata=tmp_path / "la")
+    cfg = AppConfig(language="zh-CN", active_preset="xbox", active_transport="wired")
+    desk = tmp_path / "desktop"
+    res = create_play_shortcut(paths, cfg, desktop_dir=desk)
+    assert res.ok is True
+    assert res.code == "SHORTCUT_CREATED"
+    expected_name = build_play_shortcut_name(cfg)
+    lnk_file = desk / expected_name
+    assert lnk_file.is_file() and lnk_file.stat().st_size > 100

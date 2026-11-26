@@ -6,20 +6,23 @@ import hashlib
 import json
 import os
 import subprocess
+import sys
 import urllib.error
 import urllib.request
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Callable
 
+from wiredeck.config import AppConfig
 from wiredeck.models import ActionResult
+from wiredeck.paths import AppPaths, get_assets_dir
 from wiredeck.presets import get_preset, normalize_preset_id
 from wiredeck.probes import (
     detect_local_handheld_clients,
     detect_local_ps_clients,
     detect_local_xstreaming_path,
 )
-from wiredeck.ps_runner import CREATE_NO_WINDOW, run_powershell
+from wiredeck.ps_runner import CREATE_NO_WINDOW, PsResult, run_powershell
 
 XSTREAMING_API_URL = "https://api.github.com/repos/Geocld/XStreamingDesktop/releases/latest"
 XSTREAMING_RELEASES_URL = "https://github.com/Geocld/XStreamingDesktop/releases/latest"
@@ -258,5 +261,103 @@ def launch_stream_client(prefer: str = "auto", preset_id: str = "xbox") -> Actio
         ok=False,
         code="STREAM_CLIENT_MISSING",
         message="未检测到 XStreaming 或 Xbox 应用，请先在向导中下载",
+        exit_code=1,
+    )
+
+
+def _ps_quote(value: str) -> str:
+    return "'" + value.replace("'", "''") + "'"
+
+
+def build_play_shortcut_name(cfg: AppConfig) -> str:
+    """Build a safe localized Windows .lnk filename for 1-click Quick Play."""
+    preset_labels = {
+        "xbox": "Xbox",
+        "playstation": "PlayStation",
+        "switch": "Switch",
+        "handheld": "Handheld",
+        "other": "Other",
+    }
+    mode_key = "wired" if cfg.active_transport != "wireless" else ("lan" if cfg.wireless_submode == "lan" else "hotspot")
+    lang = cfg.language if cfg.language in ("zh-CN", "zh-TW", "en", "ja") else "zh-CN"
+
+    prefix_map = {
+        "zh-CN": "WireDeck 一键开玩",
+        "zh-TW": "WireDeck 一鍵開玩",
+        "en": "WireDeck Quick Play",
+        "ja": "WireDeck クイック起動",
+    }
+    mode_map = {
+        "zh-CN": {"wired": "有线直连", "hotspot": "5G热点", "lan": "同Wi-Fi"},
+        "zh-TW": {"wired": "有線直連", "hotspot": "5G熱點", "lan": "同Wi-Fi"},
+        "en": {"wired": "Wired", "hotspot": "5G Hotspot", "lan": "Same Wi-Fi"},
+        "ja": {"wired": "有線直結", "hotspot": "5G共有", "lan": "同一Wi-Fi"},
+    }
+    p_lbl = preset_labels.get(normalize_preset_id(cfg.active_preset), "Xbox")
+    m_lbl = mode_map[lang][mode_key]
+    return f"{prefix_map[lang]} - {p_lbl} ({m_lbl}).lnk"
+
+
+def create_play_shortcut(
+    paths: AppPaths,
+    cfg: AppConfig,
+    *,
+    desktop_dir: Path | None = None,
+    runner: Callable[[str, int], PsResult] = run_powershell,
+) -> ActionResult:
+    """Create a Desktop .lnk shortcut that enables this mode and launches the stream client."""
+    bundled_exe = paths.exe_dir / "WireDeck.exe"
+    mode_sub = cfg.wireless_submode if cfg.wireless_submode in ("hotspot", "lan") else "hotspot"
+    mode_tr = cfg.active_transport if cfg.active_transport in ("wired", "wireless") else "wired"
+    quick_args = f"--quick-play --preset {normalize_preset_id(cfg.active_preset)} --transport {mode_tr} --submode {mode_sub}"
+
+    if bundled_exe.is_file():
+        target_exe = str(bundled_exe)
+        arg_str = quick_args
+    else:
+        target_exe = sys.executable
+        arg_str = f"-m wiredeck.app {quick_args}"
+
+    work_dir = str(paths.exe_dir if bundled_exe.is_file() else Path(target_exe).parent)
+    ico_file = get_assets_dir() / "wiredeck.ico"
+    icon_loc = str(ico_file) if ico_file.is_file() else f"{target_exe},0"
+
+    filename = build_play_shortcut_name(cfg)
+    desktop_expr = _ps_quote(str(desktop_dir)) if desktop_dir is not None else "[Environment]::GetFolderPath('Desktop')"
+    ps = f"""
+$ErrorActionPreference = 'Stop'
+$desktop = {desktop_expr}
+if (-not (Test-Path -LiteralPath $desktop)) {{ New-Item -ItemType Directory -Path $desktop -Force | Out-Null }}
+$lnkPath = Join-Path $desktop {_ps_quote(filename)}
+$ws = New-Object -ComObject WScript.Shell
+$sc = $ws.CreateShortcut($lnkPath)
+$sc.TargetPath = {_ps_quote(target_exe)}
+$sc.Arguments = {_ps_quote(arg_str)}
+$sc.WorkingDirectory = {_ps_quote(work_dir)}
+$sc.IconLocation = {_ps_quote(icon_loc)}
+$sc.Description = {_ps_quote("WireDeck Quick Play")}
+$sc.Save()
+Write-Output $lnkPath
+"""
+    res = runner(ps, 15)
+    out_path = res.stdout.strip().splitlines()[-1].strip() if res.stdout.strip() else ""
+    if res.returncode == 0 and out_path:
+        msg_map = {
+            "zh-CN": f"已创建桌面快捷方式：{filename}",
+            "zh-TW": f"已建立桌面捷徑：{filename}",
+            "en": f"Desktop shortcut created: {filename}",
+            "ja": f"デスクトップショートカットを作成しました：{filename}",
+        }
+        return ActionResult(
+            ok=True,
+            code="SHORTCUT_CREATED",
+            message=msg_map.get(cfg.language, msg_map["zh-CN"]),
+            exit_code=0,
+            details={"path": out_path, "filename": filename},
+        )
+    return ActionResult(
+        ok=False,
+        code="SHORTCUT_FAILED",
+        message=f"创建桌面快捷方式失败：{res.stderr.strip() or 'WScript.Shell error'}",
         exit_code=1,
     )

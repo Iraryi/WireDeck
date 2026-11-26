@@ -38,6 +38,7 @@
     guideLastFlowKey: "",
     guideUserPicked: false,
     guidePingResult: null,
+    guideShortcutCreatedKey: "",
   };
 
   function t(key) {
@@ -1035,7 +1036,7 @@
       paramKind: !isWireless ? "wired_ip" : (submode === "hotspot" ? "hotspot" : "lan_ip"),
     });
 
-    // Final Verification & Play Step
+    // Final Verification & Play Entry Step
     const pingOk = Boolean(state.guidePingResult && state.guidePingResult.ok);
     const vOk = peerReachable || pingOk;
     const vActions = [
@@ -1058,9 +1059,6 @@
         },
       },
     ];
-    if (presetMeta.uses_stream_client) {
-      vActions.push({ label: t("wiz_s3_launch"), primary: vOk, onClick: launchClientFn });
-    }
     steps.push({
       id: "verify",
       actor: "verify",
@@ -1072,10 +1070,32 @@
       actions: vActions,
       checklist: [],
       paramKind: "verify",
+      flowKey: `${isWireless ? "wireless" : "wired"}:${submode}:${presetId}`,
       dailyTip: t(!isWireless ? "guide_daily_tip_wired" : (submode === "hotspot" ? "guide_daily_tip_hs" : "guide_daily_tip_lan")),
     });
 
     return steps;
+  }
+
+  function detectGuideClientLabel(byId, presetId, presetMeta) {
+    const m = (byId.L6 && byId.L6.metrics) || (byId.W6 && byId.W6.metrics) || {};
+    if (presetId === "xbox") {
+      if (m.xstreaming_path) return { found: true, label: "XStreaming" };
+      if (m.xbox_app_installed) return { found: true, label: "Xbox" };
+      return { found: false, label: "XStreaming" };
+    }
+    if (presetId === "playstation") {
+      if (m.chiaki_path) return { found: true, label: "Chiaki-ng" };
+      if (m.ps_remote_path) return { found: true, label: "PS Remote Play" };
+      return { found: false, label: "Chiaki-ng" };
+    }
+    if (presetId === "handheld") {
+      if (m.moonlight_path) return { found: true, label: "Moonlight" };
+      if (m.steam_path) return { found: true, label: "Steam" };
+      if (m.sunshine_path) return { found: true, label: "Sunshine" };
+      return { found: false, label: "Moonlight" };
+    }
+    return { found: false, label: (presetMeta && presetMeta.official_client_name) || "" };
   }
 
   function renderGuideParams(step, byId, report, cfg) {
@@ -1200,6 +1220,74 @@
         }
         host.appendChild(resBox);
       }
+
+      const presetId = getActivePresetId(report);
+      const presetMeta = getActivePresetMeta(report);
+      const clientInfo = detectGuideClientLabel(byId, presetId, presetMeta);
+
+      const entryCard = document.createElement("div");
+      entryCard.className = "guide-entry-card";
+      const descText = presetMeta.uses_stream_client
+        ? t("guide_entry_desc_client").replace(/\{client\}/g, clientInfo.label)
+        : t("guide_entry_desc_noclient");
+      entryCard.innerHTML = `
+        <div class="guide-entry-col">
+          <div class="guide-entry-title">${escapeHtml(t("guide_entry_title"))}</div>
+          <div class="guide-entry-desc">${escapeHtml(descText)}</div>
+        </div>
+      `;
+
+      const entryActs = document.createElement("div");
+      entryActs.className = "row-actions";
+
+      const scDone = Boolean(step.flowKey && state.guideShortcutCreatedKey === step.flowKey);
+      const scBtn = document.createElement("button");
+      scBtn.type = "button";
+      scBtn.className = !presetMeta.uses_stream_client ? "btn btn-sm btn-primary" : "btn btn-sm";
+      scBtn.textContent = t(scDone ? "guide_btn_shortcut_done" : "guide_btn_create_shortcut");
+      scBtn.addEventListener("click", async () => {
+        const api = getApi();
+        if (!api || !api.create_play_shortcut) return;
+        scBtn.disabled = true;
+        try {
+          const r = await api.create_play_shortcut();
+          showToast(r.message || (r.ok ? "OK" : r.code));
+          if (r.ok && step.flowKey) {
+            state.guideShortcutCreatedKey = step.flowKey;
+            scBtn.textContent = t("guide_btn_shortcut_done");
+          }
+        } catch (err) {
+          showToast(String(err));
+        } finally {
+          scBtn.disabled = false;
+        }
+      });
+      entryActs.appendChild(scBtn);
+
+      if (presetMeta.uses_stream_client) {
+        const enterBtn = document.createElement("button");
+        enterBtn.type = "button";
+        enterBtn.className = "btn btn-sm btn-primary";
+        enterBtn.textContent = t(clientInfo.found ? "guide_btn_enter_client" : "guide_btn_get_client").replace("{client}", clientInfo.label);
+        enterBtn.addEventListener("click", async () => {
+          const api = getApi();
+          if (!api) return;
+          if (clientInfo.found) {
+            const r = await api.launch_stream_client();
+            showToast(r.message || "OK");
+          } else {
+            showToast(t("toast_working"));
+            const r = await api.download_xstreaming();
+            showToast(r.message || (r.ok ? "OK" : "Error"));
+            await refreshAll(true);
+          }
+        });
+        entryActs.appendChild(enterBtn);
+      }
+
+      entryCard.appendChild(entryActs);
+      host.appendChild(entryCard);
+
       if (step.dailyTip) {
         const tip = document.createElement("div");
         tip.className = "guide-tip";

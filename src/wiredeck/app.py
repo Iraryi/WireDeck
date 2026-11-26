@@ -34,6 +34,7 @@ from wiredeck.presets import get_preset, list_presets, normalize_preset_id
 from wiredeck.probes import _ping_peer, collect_system_snapshot
 from wiredeck.ps_runner import is_admin, run_elevated_worker, run_powershell
 from wiredeck.stream_client import (
+    create_play_shortcut,
     download_and_verify_asset,
     fetch_latest_xstreaming_release,
     launch_stream_client,
@@ -745,6 +746,20 @@ class WireDeckApi:
     def launch_stream_client(self) -> dict[str, Any]:
         return launch_stream_client(preset_id=self.cfg.active_preset).to_dict()
 
+    def create_play_shortcut(self) -> dict[str, Any]:
+        """Create a Desktop .lnk Quick-Play shortcut for the current preset and transport."""
+        if self._preview_state:
+            from wiredeck.stream_client import build_play_shortcut_name
+
+            fname = build_play_shortcut_name(self.cfg)
+            return ActionResult(
+                ok=True,
+                code="PREVIEW_ONLY",
+                message=f"预览模式下模拟已创建：{fname}",
+                details={"filename": fname},
+            ).to_dict()
+        return create_play_shortcut(self.paths, self.cfg).to_dict()
+
     def open_folder(self, kind: str) -> dict[str, Any]:
         mapping = {
             "extensions": self.paths.extensions_dir,
@@ -884,6 +899,66 @@ def _acquire_single_instance_mutex(window_title: str) -> int | None:
         return None
 
 
+def _run_quick_play(
+    api: WireDeckApi,
+    *,
+    preset_id: str | None = None,
+    transport: str | None = None,
+    submode: str | None = None,
+    launch_fn: Callable[..., ActionResult] = launch_stream_client,
+) -> tuple[bool, str]:
+    """Activate the target transport if idle, then launch the preset stream client."""
+    if preset_id:
+        api.cfg.switch_preset(preset_id)
+    if transport in ("wired", "wireless"):
+        api.cfg.active_transport = transport
+    if submode in ("hotspot", "lan"):
+        api.cfg.wireless_submode = submode
+    save_config(api.paths, api.cfg)
+
+    active_t = api.cfg.active_transport
+    active_sub = api.cfg.wireless_submode
+    fallback_view = "wireless" if active_t == "wireless" else "home"
+
+    if active_t == "wireless":
+        w_snap = api._wireless_snapshot_fn(api.cfg, probe_network=False)
+        w_rep = classify_wireless_snapshot(w_snap, api.cfg)
+        if active_sub == "hotspot":
+            w3 = next((l for l in w_rep.layers if l.layer == "W3"), None)
+            hs_on = bool(w3 and w3.metrics.get("hotspot_state") == "On")
+            if not hs_on:
+                res = api._execute_or_elevate("enable-hotspot", {"force": False})
+                if not res.ok:
+                    return False, fallback_view
+        else:
+            w1 = next((l for l in w_rep.layers if l.layer == "W1"), None)
+            w4 = next((l for l in w_rep.layers if l.layer == "W4"), None)
+            anti_on = bool(w4 and w4.metrics.get("anti_stutter_active"))
+            if not anti_on:
+                if w1 and w1.status == Severity.FAIL:
+                    return False, fallback_view
+                res = api._execute_or_elevate("optimize-wifi", {})
+                if not res.ok:
+                    return False, fallback_view
+    else:
+        snap = api._snapshot_fn(api.cfg, probe_network=False)
+        rep = classify_snapshot(snap, api.cfg)
+        l4 = next((l for l in rep.layers if l.layer == "L4"), None)
+        nat_on = bool(l4 and l4.metrics.get("nat_active"))
+        if not nat_on:
+            if not rep.can_enable_direct:
+                return False, fallback_view
+            res = api._execute_or_elevate("enable-direct", {})
+            if not res.ok:
+                return False, fallback_view
+
+    preset = get_preset(api.cfg.active_preset)
+    if preset.uses_stream_client:
+        launch_res = launch_fn(preset_id=preset.id)
+        return (bool(launch_res.ok), "" if launch_res.ok else fallback_view)
+    return False, fallback_view
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="WireDeck", add_help=True)
     parser.add_argument(
@@ -895,7 +970,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--preset",
         default=None,
-        help="Override active preset in preview mode",
+        help="Override active preset in preview or quick-play mode",
     )
     parser.add_argument(
         "--theme",
@@ -926,6 +1001,23 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="Optional 1-based step index when previewing wizard view",
     )
+    parser.add_argument(
+        "--quick-play",
+        action="store_true",
+        help="Activate configured connection mode if idle and launch streaming client",
+    )
+    parser.add_argument(
+        "--transport",
+        choices=["wired", "wireless"],
+        default=None,
+        help="Optional transport override for --quick-play",
+    )
+    parser.add_argument(
+        "--submode",
+        choices=["hotspot", "lan"],
+        default=None,
+        help="Optional wireless submode override for --quick-play",
+    )
     args = parser.parse_args(argv)
 
     title = f"{APP_NAME} v{APP_VERSION}"
@@ -933,6 +1025,22 @@ def main(argv: list[str] | None = None) -> int:
     if not args.preview_state and not args.capture_to:
         mutex_handle = _acquire_single_instance_mutex(title)
         if mutex_handle == -1:
+            return 0
+
+    api = WireDeckApi(preview_state=args.preview_state, preview_wizard_step=args.wizard_step)
+    if args.quick_play and not args.preview_state:
+        done, _ = _run_quick_play(
+            api,
+            preset_id=args.preset,
+            transport=args.transport,
+            submode=args.submode,
+        )
+        if done:
+            if mutex_handle and mutex_handle > 0 and os.name == "nt":
+                try:
+                    ctypes.windll.kernel32.CloseHandle(mutex_handle)
+                except Exception:
+                    pass
             return 0
 
     # Enable crisp per-monitor DPI awareness on Windows
@@ -947,13 +1055,12 @@ def main(argv: list[str] | None = None) -> int:
 
     import webview
 
-    api = WireDeckApi(preview_state=args.preview_state, preview_wizard_step=args.wizard_step)
     if args.preview_state in ("wireless", "wireless_lan", "wireless_wizard"):
         api.cfg.active_transport = "wireless"
         api.cfg.wireless_submode = "lan" if args.preview_state == "wireless_lan" else "hotspot"
     elif args.preview_state in ("ready", "breakpoint", "wizard"):
         api.cfg.active_transport = "wired"
-    if args.preset:
+    if args.preset and not args.quick_play:
         api.cfg.switch_preset(args.preset)
     if args.theme:
         api.cfg.theme = args.theme

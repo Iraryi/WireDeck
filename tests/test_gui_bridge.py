@@ -176,5 +176,77 @@ def test_i18n_js_has_exact_key_parity_and_concise_home_copy():
         "guide_c_sw_w_2",
         "guide_c_hh_w_2",
         "guide_daily_tip_wired",
+        "guide_entry_title",
+        "guide_btn_create_shortcut",
+        "guide_btn_enter_client",
     ):
         assert required_guide_key in base_keys
+
+
+def test_quick_play_activates_direct_and_launches_or_falls_back(tmp_path: Path):
+    from wiredeck.app import _run_quick_play
+    from wiredeck.models import ActionResult
+    from wiredeck.version import NAT_NAME
+
+    paths = resolve_app_paths(tmp_path / "app", local_appdata=tmp_path / "la")
+    base_snap: dict[str, Any] = {
+        "os_version": "Windows 11",
+        "is_admin": True,
+        "net_adapters": [
+            {"name": "Ethernet", "interface_description": "2.5GbE", "interface_index": 12, "status": "Up", "link_speed_bps": 1_000_000_000, "link_speed_text": "1 Gbps", "pnp_device_id": "PCI\\VEN_10EC", "is_virtual": False, "is_wireless": False, "rx_errors": 0, "tx_errors": 0, "rx_discards": 0, "tx_discards": 0, "powersave_enabled": []},
+            {"name": "Wi-Fi", "interface_description": "Wi-Fi 6E", "interface_index": 8, "status": "Up", "link_speed_bps": 866_000_000, "link_speed_text": "866 Mbps", "pnp_device_id": "PCI\\VEN_8086", "is_virtual": False, "is_wireless": True, "rx_errors": 0, "tx_errors": 0, "rx_discards": 0, "tx_discards": 0, "powersave_enabled": []},
+        ],
+        "pnp_ethernet_devices": [],
+        "ipv4_addresses": [{"interface_alias": "Ethernet", "interface_index": 12, "ip": "192.168.50.2", "prefix_length": 24}],
+        "default_routes": [{"interface_alias": "Wi-Fi", "interface_index": 8, "next_hop": "192.168.1.1", "metric": 35, "is_virtual_or_tun": False, "interface_description": "Wi-Fi"}],
+        "ip_forwarding": {"Ethernet": True, "Wi-Fi": True},
+        "ics_sharing_interfaces": [],
+        "shared_access_service_status": "Stopped",
+        "udp_listeners": [],
+        "net_nats": [{"name": NAT_NAME, "internal_subnet": "192.168.50.0/24"}],
+        "firewall_rules": {"WireDeck-WinNAT-Allow": True, "WireDeck-Direct-Allow": True},
+        "uwp_exempt_packages": [],
+        "uwp_missing_packages": [],
+        "stream_clients": {"xstreaming_path": "C:\\XStreaming.exe", "xbox_app_installed": True},
+        "connectivity": {"peer_reachable": True, "peer_rtt_ms": 0.4, "host_internet_ok": True},
+    }
+
+    # 1. Already active -> skips enable-direct, launches client directly
+    actions_called: list[str] = []
+    launched: list[str] = []
+    api1 = WireDeckApi(paths=paths, snapshot_fn=lambda *a, **kw: base_snap)
+    api1._execute_or_elevate = lambda act, opts: actions_called.append(act) or ActionResult(ok=True, code="OK", message="OK")  # type: ignore[method-assign]
+    done1, view1 = _run_quick_play(
+        api1,
+        preset_id="xbox",
+        transport="wired",
+        submode="hotspot",
+        launch_fn=lambda preset_id="xbox": launched.append(preset_id) or ActionResult(ok=True, code="LAUNCHED", message="OK"),
+    )
+    assert done1 is True and view1 == "" and actions_called == [] and launched == ["xbox"]
+
+    # 2. Idle & ready -> calls enable-direct first, then launches client
+    idle_snap = {**base_snap, "net_nats": []}
+    api2 = WireDeckApi(paths=paths, snapshot_fn=lambda *a, **kw: idle_snap)
+    api2._execute_or_elevate = lambda act, opts: actions_called.append(act) or ActionResult(ok=True, code="OK", message="OK")  # type: ignore[method-assign]
+    done2, view2 = _run_quick_play(
+        api2,
+        preset_id="playstation",
+        transport="wired",
+        submode="hotspot",
+        launch_fn=lambda preset_id="playstation": launched.append(preset_id) or ActionResult(ok=True, code="LAUNCHED", message="OK"),
+    )
+    assert done2 is True and actions_called == ["enable-direct"] and launched[-1] == "playstation"
+
+    # 3. Blocked by VPN TUN -> returns (False, "home") without launching
+    tun_snap = {
+        **idle_snap,
+        "default_routes": [
+            *idle_snap["default_routes"],
+            {"interface_alias": "VPN", "interface_index": 33, "next_hop": "172.19.0.2", "metric": 5, "is_virtual_or_tun": True, "interface_description": "sing-tun"},
+        ],
+    }
+    launched.clear()
+    api3 = WireDeckApi(paths=paths, snapshot_fn=lambda *a, **kw: tun_snap)
+    done3, view3 = _run_quick_play(api3, preset_id="xbox", transport="wired", submode="hotspot", launch_fn=lambda **kw: launched.append("nope") or ActionResult(ok=True, code="OK", message="OK"))
+    assert done3 is False and view3 == "home" and launched == []

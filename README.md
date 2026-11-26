@@ -26,9 +26,10 @@
 | <img src="assets/screenshots/home_breakpoint.png" alt="断点拦截视图" width="100%" /> | <img src="assets/screenshots/wizard.png" alt="首次准备向导" width="100%" /> |
 
 <details>
-<summary>展开查看 AI / DSH 协作抽屉截图</summary>
+<summary>展开查看 AI / DSH 协作接口与中性深灰模式截图</summary>
 <p align="center">
-  <img src="assets/screenshots/ai_drawer.png" alt="AI / DSH 协作接口面板" width="82%" />
+  <img src="assets/screenshots/ai_drawer.png" alt="AI / DSH 协作接口面板" width="48%" />
+  <img src="assets/screenshots/home_dark.png" alt="中性深灰主题" width="48%" />
 </p>
 </details>
 

@@ -3,6 +3,7 @@
 
   const state = {
     lang: "zh-CN",
+    theme: "light",
     appState: null,
     report: null,
     extensions: [],
@@ -26,6 +27,11 @@
     });
   }
 
+  function applyTheme(theme) {
+    state.theme = theme === "dark" ? "dark" : "light";
+    document.documentElement.setAttribute("data-theme", state.theme);
+  }
+
   function showToast(msg) {
     const el = document.getElementById("toast");
     el.textContent = msg;
@@ -34,9 +40,13 @@
     showToast._tid = setTimeout(() => el.classList.remove("show"), 2600);
   }
 
+  function escapeHtml(s) {
+    return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  }
+
   function sevIcon(sev) {
-    if (sev === "ok") return "✓";
-    if (sev === "warn") return "!";
+    if (sev === "ok") return "●";
+    if (sev === "warn") return "▲";
     if (sev === "fail") return "✕";
     if (sev === "skipped") return "—";
     return "○";
@@ -46,19 +56,51 @@
     return `${sevIcon(sev)} ${t("sev_" + (sev || "idle"))}`;
   }
 
+  function severityRank(s) {
+    return { skipped: 0, idle: 1, ok: 2, warn: 3, fail: 4 }[s] || 0;
+  }
+
   function switchView(name) {
     document.querySelectorAll(".view").forEach((v) => v.classList.remove("active"));
     const target = document.getElementById("view" + name.charAt(0).toUpperCase() + name.slice(1));
     if (target) target.classList.add("active");
-    document.getElementById("btnOpenAi").classList.toggle("active", name === "ai");
+    document.querySelectorAll("[data-nav]").forEach((btn) => {
+      btn.classList.toggle("active", btn.getAttribute("data-nav") === name);
+    });
   }
 
   function getApi() {
     return window.pywebview && window.pywebview.api;
   }
 
-  function severityRank(s) {
-    return { skipped: 0, idle: 1, ok: 2, warn: 3, fail: 4 }[s] || 0;
+  function describeLayerDetail(layer, combinedL6) {
+    const faults = layer.faults || [];
+    const primary = faults.find((f) => f.severity === "fail") || faults.find((f) => f.severity === "warn");
+    if (primary) {
+      return primary.message || primary.title;
+    }
+    const m = layer.metrics || {};
+    if (layer.layer === "L1") {
+      return m.selected_ethernet ? `${m.selected_ethernet} · 节能已关` : (layer.summary || "—");
+    }
+    if (layer.layer === "L2") {
+      return layer.summary ? `${layer.summary} 全双工` : "—";
+    }
+    if (layer.layer === "L3") {
+      return "无 VPN TUN / ICS / 端口冲突";
+    }
+    if (layer.layer === "L4") {
+      return m.nat_active ? "WireDeckNat 运行中 · IP Forwarding 已开" : "未开启（日常上网模式）";
+    }
+    if (layer.layer === "L5/L6") {
+      const parts = [];
+      if (m.peer_ip) parts.push(m.peer_ip);
+      if (layer.summary) parts.push(layer.summary);
+      if (combinedL6 && combinedL6.status === "ok") parts.push("串流端已就绪");
+      if (combinedL6 && combinedL6.status === "skipped") parts.push("轻量模式");
+      return parts.join(" · ") || "—";
+    }
+    return layer.summary || "—";
   }
 
   function renderReport(report) {
@@ -67,27 +109,33 @@
     const byId = {};
     layers.forEach((l) => { byId[l.layer] = l; });
 
-    // Mode pill
-    const modePill = document.getElementById("modePill");
-    modePill.className = "mode-pill " + (report.mode || "normal");
-    modePill.textContent = t("mode_" + (report.mode || "normal"));
+    document.getElementById("modeLabel").textContent = t("mode_" + (report.mode || "normal"));
 
-    // Headline
     const dot = document.getElementById("headlineDot");
     const pf = report.primary_fault;
-    dot.className = "pulse-dot " + (pf ? pf.severity : (report.mode === "direct" ? "ok" : "idle"));
+    dot.className = "status-led " + (pf ? pf.severity : (report.mode === "direct" ? "ok" : "idle"));
     document.getElementById("headlineText").textContent = report.headline || "";
 
-    const profileMap = { xbox: "Xbox Series X|S", ps5: "PS5 · 轻量模式", generic: "通用主机 · 轻量" };
-    document.getElementById("profileChip").textContent = profileMap[report.console_profile] || report.console_profile;
+    const ethName = (byId.L1 && byId.L1.metrics && byId.L1.metrics.selected_ethernet) || "";
+    const speedTxt = (byId.L2 && byId.L2.summary) || "";
+    const shareTxt = (byId.L4 && byId.L4.summary) || "";
+    const metaParts = [];
+    if (ethName) metaParts.push(ethName);
+    if (speedTxt && speedTxt !== "待检测") metaParts.push(speedTxt);
+    if (shareTxt) metaParts.push(`WinNAT ${shareTxt}`);
+    document.getElementById("ctrlMeta").textContent = metaParts.join(" · ") || "—";
 
-    // Combine L5 + L6 into clean 5th node on Home screen
-    const l5 = byId.L5 || { layer: "L5", status: "idle", summary: "待检测", faults: [] };
-    const l6 = byId.L6 || { layer: "L6", status: "skipped", summary: "", faults: [] };
+    const profileMap = { xbox: "Xbox Series X|S", ps5: "PS5（轻量）", generic: "通用主机" };
+    document.getElementById("sbProfile").textContent = profileMap[report.console_profile] || report.console_profile;
+
+    // Combine L5 + L6 cleanly into Row 5
+    const l5 = byId.L5 || { layer: "L5", status: "idle", summary: "待检测", faults: [], metrics: {} };
+    const l6 = byId.L6 || { layer: "L6", status: "skipped", summary: "", faults: [], metrics: {} };
     const combinedStatus = severityRank(l6.status) > severityRank(l5.status) ? l6.status : l5.status;
     const combinedSummary = severityRank(l5.status) >= severityRank(l6.status) ? l5.summary : l6.summary;
     const combinedNode = {
       key: "node_console",
+      l6Ref: l6,
       layerObj: {
         layer: "L5/L6",
         name: t("node_console"),
@@ -98,7 +146,7 @@
       },
     };
 
-    const nodes = [
+    const rows = [
       { key: "node_nic", layerObj: byId.L1 },
       { key: "node_cable", layerObj: byId.L2 },
       { key: "node_gate", layerObj: byId.L3 },
@@ -106,37 +154,48 @@
       combinedNode,
     ];
 
-    const grid = document.getElementById("chainGrid");
-    grid.innerHTML = "";
-    nodes.forEach((n, idx) => {
-      const l = n.layerObj || { status: "idle", summary: "—", faults: [] };
-      const card = document.createElement("div");
-      card.className = `chain-node sev-${l.status}`;
-      card.innerHTML = `
-        <div class="node-name">${escapeHtml(t(n.key))}</div>
-        <div class="sev-badge ${escapeHtml(l.status)}">${escapeHtml(sevLabel(l.status))}</div>
-        <div class="node-summary">${escapeHtml(l.summary || "—")}</div>
-      `;
-      card.addEventListener("click", () => openNodeDetail(t(n.key), l));
-      grid.appendChild(card);
+    const table = document.getElementById("diagTable");
+    table.innerHTML = "";
+    rows.forEach((r) => {
+      const l = r.layerObj || { layer: "", status: "idle", summary: "—", faults: [] };
+      const rowEl = document.createElement("div");
+      rowEl.className = `diag-row sev-${l.status}`;
+      const detailTxt = describeLayerDetail(l, r.l6Ref);
+      const hasExt = (l.faults || []).some((f) => f.source === "extension");
+      const fixableFault = (l.faults || []).find((f) => f.fix_action && (f.severity === "fail" || f.severity === "warn"));
 
-      if (idx < nodes.length - 1) {
-        const arr = document.createElement("div");
-        const arrClass = l.status === "ok" ? "ok" : (l.status === "fail" ? "fail" : "");
-        arr.className = `chain-arrow ${arrClass}`;
-        arr.textContent = "→";
-        grid.appendChild(arr);
+      rowEl.innerHTML = `
+        <div class="diag-name">${escapeHtml(t(r.key))}</div>
+        <div class="diag-detail">${escapeHtml(detailTxt)}</div>
+        <div class="diag-right">
+          ${hasExt ? `<span class="ext-tag">${escapeHtml(t("badge_ai_ext"))}</span>` : ""}
+          <span class="sev-text ${escapeHtml(l.status)}">${escapeHtml(sevLabel(l.status))}</span>
+        </div>
+      `;
+
+      if (fixableFault) {
+        const rightBox = rowEl.querySelector(".diag-right");
+        const fixBtn = document.createElement("button");
+        fixBtn.className = "btn btn-sm";
+        fixBtn.type = "button";
+        fixBtn.textContent = fixableFault.fix_action === "clear-netnat" ? t("btn_confirm_clear") : t("btn_fix_now");
+        fixBtn.addEventListener("click", (ev) => {
+          ev.stopPropagation();
+          handleFixAction(fixableFault);
+        });
+        rightBox.appendChild(fixBtn);
       }
+
+      rowEl.addEventListener("click", () => openNodeDetail(t(r.key), l));
+      table.appendChild(rowEl);
     });
 
-    // Breakpoint card
+    // Native InfoBar (breakpoint / warning)
     const bpCard = document.getElementById("breakpointCard");
     if (pf) {
       bpCard.classList.remove("hidden");
       bpCard.classList.toggle("warn", pf.severity === "warn");
-      const badge = document.getElementById("bpBadge");
-      badge.className = `sev-badge ${pf.severity}`;
-      badge.textContent = sevLabel(pf.severity);
+      document.getElementById("bpIcon").textContent = pf.severity === "warn" ? "!" : "✕";
       document.getElementById("bpTitle").textContent = pf.title || pf.code;
       document.getElementById("bpMessage").textContent = pf.message || "";
       document.getElementById("bpExtPill").style.display = pf.source === "extension" ? "inline-flex" : "none";
@@ -159,14 +218,11 @@
       bpCard.classList.add("hidden");
     }
 
-    // Main CTA buttons
+    // Action buttons
     const btnEn = document.getElementById("btnEnableDirect");
     btnEn.disabled = state.busy || !report.can_enable_direct;
-    btnEn.classList.toggle("is-active", report.mode === "direct");
 
-    // Update Wizard step badges
     updateWizardState(byId, report);
-    // Update NIC dropdown options in settings
     if (byId.L1 && byId.L1.metrics && byId.L1.metrics.physical_ethernets) {
       populateNicSelect(byId.L1.metrics.physical_ethernets);
     }
@@ -176,11 +232,10 @@
     const l1 = byId.L1 || { status: "idle" };
     const l2 = byId.L2 || { status: "idle" };
     const l5 = byId.L5 || { status: "idle" };
-    const l6 = byId.L6 || { status: "skipped", faults: [], metrics: {} };
+    const l6 = byId.L6 || { status: "skipped", faults: [] };
 
     const s1Status = (l1.status === "ok" && l2.status === "ok") ? "ok" : (l1.status === "fail" ? "fail" : "warn");
     setBadge("wizS1Badge", s1Status);
-    document.getElementById("wizStep1").classList.toggle("done", s1Status === "ok");
 
     const isXbox = report.console_profile === "xbox";
     document.getElementById("wizStep2").classList.toggle("skipped", !isXbox);
@@ -192,18 +247,15 @@
       const hasUwpMiss = (l6.faults || []).some((f) => f.code === "UWP_LOOPBACK_MISSING");
       const hasClientMiss = (l6.faults || []).some((f) => f.code === "STREAM_CLIENT_MISSING");
       setBadge("wizS2Badge", hasUwpMiss ? "warn" : "ok");
-      document.getElementById("wizStep2").classList.toggle("done", !hasUwpMiss);
       setBadge("wizS3Badge", hasClientMiss ? "warn" : "ok");
-      document.getElementById("wizStep3").classList.toggle("done", !hasClientMiss);
     }
     setBadge("wizS4Badge", l5.status === "ok" ? "ok" : "idle");
-    document.getElementById("wizStep4").classList.toggle("done", l5.status === "ok");
   }
 
   function setBadge(id, sev) {
     const el = document.getElementById(id);
     if (!el) return;
-    el.className = `sev-badge ${sev}`;
+    el.className = `sev-text ${sev}`;
     el.textContent = sevLabel(sev);
   }
 
@@ -225,10 +277,6 @@
     }
     document.getElementById("detailBody").innerHTML = lines.map((x) => `<div>${escapeHtml(x)}</div>`).join("");
     document.getElementById("detailModal").classList.add("open");
-  }
-
-  function escapeHtml(s) {
-    return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   }
 
   async function handleFixAction(fault) {
@@ -259,7 +307,7 @@
     try {
       const res = await api.run_action(action, opts || {});
       showToast(res.message || (res.ok ? "OK" : res.code));
-      await refreshAll();
+      await refreshAll(true);
     } catch (err) {
       showToast(String(err));
     } finally {
@@ -270,7 +318,7 @@
   function populateNicSelect(nics) {
     const sel = document.getElementById("setEth");
     const current = (state.appState && state.appState.config && state.appState.config.ethernet_interface) || "";
-    sel.innerHTML = `<option value="">${t("set_eth_auto")}</option>`;
+    sel.innerHTML = `<option value="">${escapeHtml(t("set_eth_auto"))}</option>`;
     nics.forEach((name) => {
       if (!name) return;
       const opt = document.createElement("option");
@@ -286,29 +334,29 @@
     const list = document.getElementById("extList");
     list.innerHTML = "";
     if (!entries || entries.length === 0) {
-      list.innerHTML = `<div class="step-desc">${t("ai_ext_empty")}</div>`;
+      list.innerHTML = `<div class="list-row"><div class="row-desc">${escapeHtml(t("ai_ext_empty"))}</div></div>`;
       return;
     }
     entries.forEach((e) => {
       const m = e.manifest || {};
       const row = document.createElement("div");
-      row.className = "ext-item";
-      const statusBadge = e.valid
-        ? `<span class="sev-badge ok">${m.layer || "L1"}</span>`
-        : `<span class="sev-badge fail">INVALID</span>`;
+      row.className = "list-row";
+      const badge = e.valid
+        ? `<span class="ext-tag">${escapeHtml(m.layer || "L1")}</span>`
+        : `<span class="sev-text fail">INVALID</span>`;
       const desc = e.valid ? (m.description || `author: ${m.author || "User"}`) : (e.errors || []).join("; ");
       row.innerHTML = `
-        <div class="ext-meta">
-          <div class="ext-name">
-            ${statusBadge}
+        <div class="list-row-col">
+          <div class="row-head">
+            ${badge}
             <span>${escapeHtml(m.name || m.id || "unknown")}</span>
-            <span class="ext-pill">${t("badge_ai_ext")}</span>
+            <span class="ext-tag">${escapeHtml(t("badge_ai_ext"))}</span>
           </div>
-          <div class="ext-sub">${escapeHtml(desc)}</div>
+          <div class="row-desc">${escapeHtml(desc)}</div>
         </div>
-        <div style="display:flex;gap:6px;">
-          ${e.valid && m.check_script ? `<button class="btn-sm" data-ext-check="${escapeHtml(m.id)}">${t("ai_run_check")}</button>` : ""}
-          ${e.valid && m.fix_script ? `<button class="btn-sm primary" data-ext-fix="${escapeHtml(m.id)}">${t("ai_run_fix")}</button>` : ""}
+        <div class="row-actions">
+          ${e.valid && m.check_script ? `<button class="btn btn-sm" data-ext-check="${escapeHtml(m.id)}">${escapeHtml(t("ai_run_check"))}</button>` : ""}
+          ${e.valid && m.fix_script ? `<button class="btn btn-sm btn-primary" data-ext-fix="${escapeHtml(m.id)}">${escapeHtml(t("ai_run_fix"))}</button>` : ""}
         </div>
       `;
       list.appendChild(row);
@@ -321,7 +369,7 @@
         if (!api) return;
         const r = await api.run_extension(id, "check");
         showToast(`[${r.status}] ${r.message || r.code}`);
-        await refreshAll();
+        await refreshAll(true);
       });
     });
     list.querySelectorAll("[data-ext-fix]").forEach((btn) => {
@@ -375,12 +423,14 @@
 
   function syncConfigDisplay(cfg) {
     state.lang = cfg.language || "zh-CN";
+    applyTheme(cfg.theme || "light");
     applyI18n();
+    document.getElementById("setTheme").value = state.theme;
     document.getElementById("setLanguage").value = cfg.language || "zh-CN";
     document.getElementById("setProfile").value = cfg.console_profile || "xbox";
     document.getElementById("setHostIp").value = cfg.host_ip || "192.168.50.2";
     document.getElementById("setPeerIp").value = cfg.peer_ip || "192.168.50.1";
-    document.getElementById("subnetMeta").textContent = `${cfg.host_ip} ↔ ${cfg.peer_ip}`;
+    document.getElementById("sbSubnet").textContent = `${cfg.host_ip} → ${cfg.peer_ip}`;
     document.getElementById("cardPeerIp").textContent = cfg.peer_ip;
     document.getElementById("cardMask").textContent = cfg.subnet_mask || "255.255.255.0";
     document.getElementById("cardHostIp").textContent = cfg.host_ip;
@@ -392,14 +442,13 @@
     if (!api) return;
     const st = await api.get_state();
     state.appState = st;
-    document.getElementById("versionPill").textContent = "v" + st.app_version;
+    document.getElementById("versionLabel").textContent = "v" + st.app_version;
     syncConfigDisplay(st.config);
     renderBridgeState(st.bridge);
     const [rep, exts] = await Promise.all([api.diagnose(), api.list_extensions()]);
     renderReport(rep);
     renderExtensions(exts);
 
-    // Honor preview initial view for clean high-DPI screenshots
     if (st.preview_view && !refreshAll._previewApplied) {
       refreshAll._previewApplied = true;
       switchView(st.preview_view);
@@ -435,12 +484,12 @@
   }
 
   function wireEvents() {
+    document.querySelectorAll("[data-nav]").forEach((btn) => {
+      btn.addEventListener("click", () => switchView(btn.getAttribute("data-nav")));
+    });
+
     document.getElementById("btnRefresh").addEventListener("click", () => refreshAll(false));
-    document.getElementById("btnOpenAi").addEventListener("click", () => switchView("ai"));
-    document.getElementById("btnOpenWizard").addEventListener("click", () => switchView("wizard"));
-    document.querySelectorAll("[data-go='home']").forEach((b) =>
-      b.addEventListener("click", () => switchView("home"))
-    );
+    document.getElementById("btnWizRefresh").addEventListener("click", () => refreshAll(false));
 
     document.getElementById("btnEnableDirect").addEventListener("click", () => runAction("enable-direct", {}));
     document.getElementById("btnDisableDirect").addEventListener("click", () => runAction("disable-direct", {}));
@@ -477,10 +526,7 @@
     document.getElementById("btnOpenExtFolder").addEventListener("click", () => getApi() && getApi().open_folder("extensions"));
     document.getElementById("btnOpenLogs").addEventListener("click", () => getApi() && getApi().open_folder("logs"));
     document.getElementById("btnOpenData").addEventListener("click", () => getApi() && getApi().open_folder("data"));
-    document.getElementById("btnResetNic").addEventListener("click", async () => {
-      document.getElementById("settingsModal").classList.remove("open");
-      await runAction("reset-nic", {});
-    });
+    document.getElementById("btnResetNic").addEventListener("click", () => runAction("reset-nic", {}));
 
     document.getElementById("bridgeToggle").addEventListener("change", async (e) => {
       const api = getApi();
@@ -495,16 +541,11 @@
       }
     });
 
-    document.getElementById("btnOpenSettings").addEventListener("click", () => {
-      document.getElementById("settingsModal").classList.add("open");
-    });
-    document.getElementById("btnCloseSettings").addEventListener("click", () => {
-      document.getElementById("settingsModal").classList.remove("open");
-    });
     document.getElementById("btnSaveSettings").addEventListener("click", async () => {
       const api = getApi();
       if (!api) return;
       const patch = {
+        theme: document.getElementById("setTheme").value,
         language: document.getElementById("setLanguage").value,
         console_profile: document.getElementById("setProfile").value,
         ethernet_interface: document.getElementById("setEth").value,
@@ -512,7 +553,6 @@
         peer_ip: document.getElementById("setPeerIp").value.trim(),
       };
       await api.save_settings(patch);
-      document.getElementById("settingsModal").classList.remove("open");
       showToast(t("toast_saved"));
       await refreshAll(true);
     });

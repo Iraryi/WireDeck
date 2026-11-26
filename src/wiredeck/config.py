@@ -15,11 +15,13 @@ from wiredeck.paths import AppPaths
 
 VALID_PROFILES = ("xbox", "ps5", "generic")
 VALID_LANGUAGES = ("zh-CN", "en")
+VALID_THEMES = ("light", "dark")
 
 
 @dataclass
 class AppConfig:
     language: str = "zh-CN"
+    theme: str = "light"
     console_profile: str = "xbox"
     host_ip: str = "192.168.50.2"
     prefix_length: int = 24
@@ -63,6 +65,10 @@ def _normalize_config(raw: dict[str, Any]) -> AppConfig:
     if language not in VALID_LANGUAGES:
         language = defaults.language
 
+    theme = raw.get("theme", defaults.theme)
+    if theme not in VALID_THEMES:
+        theme = defaults.theme
+
     profile = raw.get("console_profile", defaults.console_profile)
     if profile not in VALID_PROFILES:
         profile = defaults.console_profile
@@ -96,6 +102,7 @@ def _normalize_config(raw: dict[str, Any]) -> AppConfig:
 
     return AppConfig(
         language=language,
+        theme=theme,
         console_profile=profile,
         host_ip=host_ip,
         prefix_length=prefix_length,
@@ -134,6 +141,7 @@ def save_config(paths: AppPaths, cfg: AppConfig) -> None:
     paths.data_dir.mkdir(parents=True, exist_ok=True)
     payload = {
         "language": cfg.language,
+        "theme": cfg.theme,
         "console_profile": cfg.console_profile,
         "host_ip": cfg.host_ip,
         "prefix_length": cfg.prefix_length,

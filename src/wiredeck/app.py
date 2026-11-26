@@ -249,13 +249,14 @@ class WireDeckApi:
 
     def save_settings(self, patch: dict[str, Any]) -> dict[str, Any]:
         merged = self.cfg.to_dict()
-        for k in ("language", "console_profile", "ethernet_interface", "uplink_interface", "host_ip", "peer_ip"):
+        for k in ("theme", "language", "console_profile", "ethernet_interface", "uplink_interface", "host_ip", "peer_ip"):
             if k in patch:
                 merged[k] = patch[k]
         from wiredeck.config import _normalize_config
 
         self.cfg = _normalize_config(merged)
         save_config(self.paths, self.cfg)
+        _set_titlebar_theme(f"{APP_NAME} v{APP_VERSION}", self.cfg.theme == "dark")
         return {"ok": True, "config": self.cfg.to_dict()}
 
     def export_for_ai(self) -> dict[str, Any]:
@@ -381,20 +382,20 @@ class WireDeckApi:
             self._bridge.stop()
 
 
-def _enable_dark_titlebar(title: str) -> None:
-    """Apply Windows 11/10 dark immersive title bar matching WireDeck's obsidian theme."""
+def _set_titlebar_theme(title: str, dark: bool) -> None:
+    """Sync Windows 11/10 native title bar theme (light or neutral dark)."""
     if os.name != "nt":
         return
     try:
         user32 = ctypes.windll.user32
         dwmapi = ctypes.windll.dwmapi
-        for _ in range(20):
+        for _ in range(15):
             hwnd = user32.FindWindowW(None, title)
             if hwnd:
-                val = ctypes.c_int(1)
+                val = ctypes.c_int(1 if dark else 0)
                 dwmapi.DwmSetWindowAttribute(hwnd, 20, ctypes.byref(val), ctypes.sizeof(val))
                 return
-            time.sleep(0.1)
+            time.sleep(0.08)
     except Exception:
         pass
 
@@ -473,6 +474,12 @@ def main(argv: list[str] | None = None) -> int:
         help="Open GUI in deterministic read-only preview mode",
     )
     parser.add_argument(
+        "--theme",
+        choices=["light", "dark"],
+        default=None,
+        help="Override theme in preview mode",
+    )
+    parser.add_argument(
         "--capture-to",
         default=None,
         help="Optional PNG output path; captures window screenshot and exits cleanly",
@@ -492,23 +499,26 @@ def main(argv: list[str] | None = None) -> int:
     import webview
 
     api = WireDeckApi(preview_state=args.preview_state)
+    if args.theme:
+        api.cfg.theme = args.theme
     web_dir = get_web_dir()
     index_url = (web_dir / "index.html").resolve().as_uri()
     title = f"{APP_NAME} v{APP_VERSION}"
+    bg_hex = "#202020" if api.cfg.theme == "dark" else "#f3f3f3"
 
     window = webview.create_window(
         title=title,
         url=index_url,
         js_api=api,
-        width=980,
-        height=700,
-        min_size=(860, 620),
-        background_color="#080d18",
+        width=840,
+        height=520,
+        min_size=(760, 480),
+        background_color=bg_hex,
         resizable=True,
     )
 
     def _on_started() -> None:
-        _enable_dark_titlebar(title)
+        _set_titlebar_theme(title, api.cfg.theme == "dark")
         if args.capture_to:
             out_p = Path(args.capture_to)
             _capture_window_screenshot(title, out_p, delay_sec=2.0)

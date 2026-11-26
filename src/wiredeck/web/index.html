@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-theme="light">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -7,266 +7,277 @@
   <link rel="stylesheet" href="app.css" />
 </head>
 <body>
-  <div class="app-shell">
-    <!-- Header -->
-    <header class="topbar">
-      <div class="brand">
-        <svg class="brand-logo" viewBox="0 0 256 256" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-          <defs>
-            <linearGradient id="h-bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#0B1324"/><stop offset="100%" stop-color="#132238"/></linearGradient>
-            <linearGradient id="h-ac" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#06D6A0"/><stop offset="100%" stop-color="#0EA5E9"/></linearGradient>
-          </defs>
-          <rect x="12" y="12" width="232" height="232" rx="54" fill="url(#h-bg)" stroke="#1E3A5F" stroke-width="6"/>
-          <rect x="38" y="88" width="52" height="38" rx="7" fill="none" stroke="#E2E8F0" stroke-width="7"/>
-          <path d="M30 138 H98" stroke="#E2E8F0" stroke-width="8" stroke-linecap="round"/>
-          <circle cx="64" cy="107" r="6" fill="#06D6A0"/>
-          <line x1="94" y1="107" x2="115" y2="107" stroke="url(#h-ac)" stroke-width="7" stroke-linecap="round"/>
-          <polygon points="134,68 112,114 128,114 120,152 148,102 131,102" fill="url(#h-ac)"/>
-          <line x1="143" y1="107" x2="164" y2="107" stroke="url(#h-ac)" stroke-width="7" stroke-linecap="round"/>
-          <rect x="168" y="72" width="48" height="72" rx="10" fill="none" stroke="#E2E8F0" stroke-width="7"/>
-          <circle cx="192" cy="94" r="7" fill="#38BDF8"/>
-          <line x1="181" y1="126" x2="203" y2="126" stroke="#94A3B8" stroke-width="6" stroke-linecap="round"/>
-        </svg>
-        <div class="brand-text">
-          <div class="brand-row">
-            <span class="brand-name">WireDeck</span>
-            <span class="ver-pill" id="versionPill">v0.1.0</span>
-            <span class="mode-pill normal" id="modePill">日常上网</span>
-          </div>
-          <span class="brand-sub" data-i18n="app_subtitle">千兆有线直连助手</span>
+  <div class="desktop-root">
+    <div class="workspace">
+      <!-- Left Navigation Rail -->
+      <aside class="nav-rail">
+        <div class="rail-brand">
+          <svg class="rail-logo" viewBox="0 0 256 256" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+            <rect x="16" y="16" width="224" height="224" rx="40" fill="#24292F"/>
+            <path d="M56 64 H200 V168 H164 V192 H92 V168 H56 Z" fill="#161B22" stroke="#D0D7DE" stroke-width="11" stroke-linejoin="round"/>
+            <rect x="82" y="70" width="12" height="44" rx="3" fill="#E3B341"/>
+            <rect x="108" y="70" width="12" height="44" rx="3" fill="#E3B341"/>
+            <rect x="136" y="70" width="12" height="44" rx="3" fill="#E3B341"/>
+            <rect x="162" y="70" width="12" height="44" rx="3" fill="#E3B341"/>
+            <rect x="52" y="182" width="24" height="14" rx="4" fill="#2DA44E"/>
+            <rect x="180" y="182" width="24" height="14" rx="4" fill="#D29922"/>
+          </svg>
+          <span class="rail-title">WireDeck</span>
         </div>
-      </div>
 
-      <div class="top-actions">
-        <button class="icon-btn" id="btnRefresh" type="button">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><polyline points="21 3 21 9 15 9"/></svg>
-          <span data-i18n="btn_refresh">刷新</span>
-        </button>
-        <button class="icon-btn" id="btnOpenAi" type="button">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M9 9h6v6H9z"/><path d="M9 1v3M15 1v3M9 20v3M15 20v3M20 9h3M20 15h3M1 9h3M1 15h3"/></svg>
-          <span data-i18n="btn_ai">AI 接口</span>
-        </button>
-        <button class="icon-btn" id="btnOpenSettings" type="button">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.01a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.01a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
-          <span data-i18n="btn_settings">设置</span>
-        </button>
-      </div>
-    </header>
-
-    <!-- VIEW A: HOME -->
-    <main class="view active" id="viewHome">
-      <section class="headline-card">
-        <div class="headline-left">
-          <span class="pulse-dot idle" id="headlineDot"></span>
-          <span class="headline-title" id="headlineText">正在检测有线直连状态…</span>
-        </div>
-        <span class="profile-chip" id="profileChip">Xbox Series X|S</span>
-      </section>
-
-      <section class="chain-panel">
-        <div class="chain-grid" id="chainGrid"></div>
-      </section>
-
-      <section class="breakpoint-card hidden" id="breakpointCard">
-        <div class="bp-body">
-          <div class="bp-top">
-            <span class="sev-badge fail" id="bpBadge">✕ 阻断</span>
-            <span class="bp-title" id="bpTitle"></span>
-            <span class="ext-pill" id="bpExtPill" style="display:none" data-i18n="badge_ai_ext">AI 扩展</span>
-          </div>
-          <div class="bp-msg" id="bpMessage"></div>
-        </div>
-        <button class="btn-sm primary" id="bpFixBtn" type="button" style="display:none"></button>
-      </section>
-
-      <section class="cta-row">
-        <button class="cta-btn cta-primary" id="btnEnableDirect" type="button">
-          <span>▶</span>
-          <span data-i18n="btn_enable_direct">开启游戏直连</span>
-        </button>
-        <button class="cta-btn cta-secondary" id="btnDisableDirect" type="button">
-          <span>↺</span>
-          <span data-i18n="btn_disable_direct">恢复日常上网</span>
-        </button>
-      </section>
-
-      <footer class="footer-bar">
-        <div class="footer-links">
-          <button class="quiet-btn" id="btnOpenWizard" type="button">
-            <span>①</span><span data-i18n="footer_wizard">首次准备向导</span>
+        <nav class="nav-list">
+          <button class="nav-item active" data-nav="home" type="button">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg>
+            <span data-i18n="nav_home">主控台</span>
           </button>
-          <button class="quiet-btn" id="btnLaunchStream" type="button">
-            <span>▶</span><span data-i18n="footer_launch">启动串流端</span>
+          <button class="nav-item" data-nav="wizard" type="button">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
+            <span data-i18n="nav_wizard">首次向导</span>
           </button>
-          <button class="quiet-btn" id="btnCopyAiQuick" type="button">
-            <span>⧉</span><span data-i18n="footer_copy_ai">复制现场给 AI</span>
+          <button class="nav-item" data-nav="ai" type="button">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+            <span data-i18n="nav_ai">AI 接口</span>
           </button>
-        </div>
-        <span class="footer-meta mono" id="subnetMeta">192.168.50.2 ↔ 192.168.50.1</span>
-      </footer>
-    </main>
+        </nav>
 
-    <!-- VIEW B: 4-STEP WIZARD -->
-    <main class="view" id="viewWizard">
-      <div class="subview-head">
-        <div>
-          <div class="subview-title" data-i18n="wizard_title">首次准备向导</div>
-          <div class="subview-sub" data-i18n="wizard_sub">已达标步骤自动绿灯跳过，按顺序点完即可开玩</div>
-        </div>
-        <button class="icon-btn" data-go="home" type="button" data-i18n="btn_back">返回主控台</button>
-      </div>
+        <div class="nav-spacer"></div>
 
-      <div class="step-list">
-        <div class="step-card" id="wizStep1">
-          <div class="step-row">
+        <nav class="nav-list">
+          <button class="nav-item" data-nav="settings" type="button">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+            <span data-i18n="nav_settings">设置</span>
+          </button>
+        </nav>
+
+        <div class="rail-foot">
+          <span id="versionLabel">v0.1.0</span>
+          <span id="modeLabel">日常上网</span>
+        </div>
+      </aside>
+
+      <!-- Main Workspace -->
+      <main class="content-pane">
+        <!-- VIEW 1: OVERVIEW / HOME -->
+        <section class="view active" id="viewHome">
+          <div class="control-bar">
+            <div class="ctrl-left">
+              <span class="status-led idle" id="headlineDot"></span>
+              <div>
+                <div class="ctrl-title" id="headlineText">正在检测有线直连状态…</div>
+                <div class="ctrl-meta mono" id="ctrlMeta">192.168.50.2 ↔ 192.168.50.1</div>
+              </div>
+            </div>
+            <div class="ctrl-actions">
+              <button class="btn btn-primary" id="btnEnableDirect" type="button" data-i18n="btn_enable_direct">开启游戏直连</button>
+              <button class="btn" id="btnDisableDirect" type="button" data-i18n="btn_disable_direct">恢复日常上网</button>
+              <button class="btn btn-icon" id="btnRefresh" type="button" title="刷新">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><polyline points="21 3 21 9 15 9"/></svg>
+              </button>
+            </div>
+          </div>
+
+          <div class="infobar hidden" id="breakpointCard">
+            <div class="infobar-left">
+              <span class="infobar-ico" id="bpIcon">!</span>
+              <div>
+                <span class="infobar-title" id="bpTitle"></span>
+                <span class="ext-tag" id="bpExtPill" style="display:none;margin-right:6px;" data-i18n="badge_ai_ext">AI 扩展</span>
+                <span class="infobar-msg" id="bpMessage"></span>
+              </div>
+            </div>
+            <button class="btn btn-sm" id="bpFixBtn" type="button" style="display:none"></button>
+          </div>
+
+          <div class="sec-label" data-i18n="sec_chain">链路诊断（点击行查看详情）</div>
+          <div class="group-box" id="diagTable"></div>
+        </section>
+
+        <!-- VIEW 2: 4-STEP SETUP WIZARD -->
+        <section class="view" id="viewWizard">
+          <div class="page-head">
             <div>
-              <div class="step-title"><span id="wizS1Badge" class="sev-badge idle">○ 待命</span><span data-i18n="wiz_s1_title">1. 有线网口体检</span></div>
-              <div class="step-desc" data-i18n="wiz_s1_desc">唤醒禁用的网卡/PCIe 通道，关闭 EEE 节能防卡顿</div>
+              <div class="page-title" data-i18n="wizard_title">首次准备向导</div>
+              <div class="page-sub" data-i18n="wizard_sub">已达标步骤自动绿灯，只需处理剩余项</div>
             </div>
-            <button class="btn-sm primary" id="btnWizFixNic" type="button" data-i18n="wiz_s1_btn">一键唤醒并防抖</button>
+            <button class="btn btn-sm" id="btnWizRefresh" type="button" data-i18n="btn_refresh">刷新</button>
           </div>
-        </div>
 
-        <div class="step-card" id="wizStep2">
-          <div class="step-row">
+          <div class="group-box">
+            <div class="list-row" id="wizStep1">
+              <div class="list-row-col">
+                <div class="row-head"><span id="wizS1Badge" class="sev-text idle">○ 待命</span><span data-i18n="wiz_s1_title">1. 有线网口体检</span></div>
+                <div class="row-desc" data-i18n="wiz_s1_desc">唤醒禁用的网卡 / PCIe 通道，关闭 EEE 节能防卡顿</div>
+              </div>
+              <div class="row-actions">
+                <button class="btn btn-sm" id="btnWizFixNic" type="button" data-i18n="wiz_s1_btn">唤醒并防抖</button>
+              </div>
+            </div>
+
+            <div class="list-row" id="wizStep2">
+              <div class="list-row-col">
+                <div class="row-head"><span id="wizS2Badge" class="sev-text idle">○ 待命</span><span data-i18n="wiz_s2_title">2. 解除代理拦截</span></div>
+                <div class="row-desc" data-i18n="wiz_s2_desc">为微软商店与 Xbox 写入 UWP 回环豁免</div>
+              </div>
+              <div class="row-actions">
+                <button class="btn btn-sm" id="btnWizFixUwp" type="button" data-i18n="wiz_s2_btn">写入豁免</button>
+              </div>
+            </div>
+
+            <div class="list-row" id="wizStep3">
+              <div class="list-row-col">
+                <div class="row-head"><span id="wizS3Badge" class="sev-text idle">○ 待命</span><span data-i18n="wiz_s3_title">3. 准备串流客户端</span></div>
+                <div class="row-desc" data-i18n="wiz_s3_desc">检测本机 XStreaming / Xbox 应用，或官方校验下载</div>
+              </div>
+              <div class="row-actions">
+                <button class="btn btn-sm" id="btnWizDownload" type="button" data-i18n="wiz_s3_btn">下载并校验</button>
+                <button class="btn btn-sm btn-primary" id="btnWizLaunch" type="button" data-i18n="wiz_s3_launch">启动</button>
+              </div>
+            </div>
+
+            <div id="wizStep4">
+              <div class="list-row" style="border-bottom:none;">
+                <div class="list-row-col">
+                  <div class="row-head"><span id="wizS4Badge" class="sev-text idle">○ 待命</span><span data-i18n="wiz_s4_title">4. 主机静态参数 & 连通验收</span></div>
+                  <div class="row-desc" data-i18n="wiz_s4_desc">在游戏机网络设置中一次性填入以下 4 项</div>
+                </div>
+                <div class="row-actions">
+                  <button class="btn btn-sm" id="btnWizCopyIp" type="button" data-i18n="wiz_copy_params">复制参数</button>
+                  <button class="btn btn-sm btn-primary" id="btnWizTestPeer" type="button" data-i18n="wiz_test_peer">测试连通</button>
+                </div>
+              </div>
+              <div class="ip-box">
+                <div><div class="ip-k">IP 地址</div><div class="ip-v mono" id="cardPeerIp">192.168.50.1</div></div>
+                <div><div class="ip-k">子网掩码</div><div class="ip-v mono" id="cardMask">255.255.255.0</div></div>
+                <div><div class="ip-k">默认网关</div><div class="ip-v mono" id="cardHostIp">192.168.50.2</div></div>
+                <div><div class="ip-k">DNS</div><div class="ip-v mono" id="cardDns">223.5.5.5 / 8.8.8.8</div></div>
+              </div>
+              <div class="note-line" data-i18n="wiz_headless_tip">无显示器首次配置：可先借屏幕或采集卡 5 分钟打开「启用远程功能」。</div>
+            </div>
+          </div>
+        </section>
+
+        <!-- VIEW 3: AI / DSH PORT -->
+        <section class="view" id="viewAi">
+          <div class="page-head">
             <div>
-              <div class="step-title"><span id="wizS2Badge" class="sev-badge idle">○ 待命</span><span data-i18n="wiz_s2_title">2. 解除代理拦截</span></div>
-              <div class="step-desc" data-i18n="wiz_s2_desc">豁免微软商店与 Xbox 回环隔离，开代理也能登录</div>
+              <div class="page-title" data-i18n="ai_title">AI / DSH 协作接口</div>
+              <div class="page-sub" data-i18n="ai_sub">导出脱敏现场，或往 extensions/ 放入脚本免编译热加载</div>
             </div>
-            <button class="btn-sm primary" id="btnWizFixUwp" type="button" data-i18n="wiz_s2_btn">一键写入豁免</button>
+            <div class="row-actions">
+              <button class="btn btn-sm btn-primary" id="btnAiExportCopy" type="button" data-i18n="ai_copy_btn">导出脱敏包并复制</button>
+              <button class="btn btn-sm" id="btnOpenExtFolder" type="button" data-i18n="ai_open_ext">打开扩展目录</button>
+            </div>
           </div>
-        </div>
 
-        <div class="step-card" id="wizStep3">
-          <div class="step-row">
+          <div class="group-box">
+            <div class="list-row">
+              <div class="list-row-col">
+                <div class="row-head">CLI 入口（同步 JSON · 退出码 0/1/2/3）</div>
+                <div class="row-desc mono">wiredeck-cli.exe diagnose --json &nbsp;|&nbsp; apply &lt;action&gt; --json &nbsp;|&nbsp; ext validate &lt;dir&gt;</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="sec-label" data-i18n="ai_ext_heading">已加载扩展 (extensions/)</div>
+          <div class="group-box" id="extList"></div>
+
+          <div class="group-box">
+            <div class="list-row" style="border-bottom:none;">
+              <div class="list-row-col">
+                <div class="row-head" data-i18n="ai_bridge_heading">本地 HTTP Bridge（默认关闭）</div>
+                <div class="row-desc" data-i18n="ai_bridge_desc">仅绑定 127.0.0.1 随机端口与 32 字节随机 Token，写操作需界面确认。</div>
+              </div>
+              <label class="win-switch">
+                <input type="checkbox" id="bridgeToggle" />
+                <span class="win-slider"></span>
+              </label>
+            </div>
+            <div id="bridgeDetails" class="bridge-info" style="display:none;">
+              <div>Endpoint: <span class="mono" id="bridgeUrl"></span></div>
+              <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
+                <span>Bearer Token: <span class="mono" id="bridgeTokenMask"></span></span>
+                <button class="btn btn-sm" id="btnCopyToken" type="button" data-i18n="ai_bridge_copy">复制 Token</button>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- VIEW 4: SETTINGS (Native Page, no cramped modal) -->
+        <section class="view" id="viewSettings">
+          <div class="page-head">
             <div>
-              <div class="step-title"><span id="wizS3Badge" class="sev-badge idle">○ 待命</span><span data-i18n="wiz_s3_title">3. 准备串流客户端</span></div>
-              <div class="step-desc" id="wizS3Desc" data-i18n="wiz_s3_desc">自动检测本机 XStreaming / Xbox 应用，或官方校验下载</div>
+              <div class="page-title" data-i18n="settings_title">设置</div>
+              <div class="page-sub" data-i18n="settings_sub">配置保存在本地数据目录，卸载时默认保留</div>
             </div>
-            <div style="display:flex;gap:8px;">
-              <button class="btn-sm primary" id="btnWizDownload" type="button" data-i18n="wiz_s3_btn">官方下载并校验</button>
-              <button class="btn-sm" id="btnWizLaunch" type="button" data-i18n="wiz_s3_launch">打开串流端</button>
+            <button class="btn btn-sm btn-primary" id="btnSaveSettings" type="button" data-i18n="btn_save">保存</button>
+          </div>
+
+          <div class="group-box">
+            <div class="setting-row">
+              <span class="setting-label" data-i18n="set_theme">外观主题</span>
+              <select id="setTheme">
+                <option value="light" data-i18n="set_theme_light">浅色（Windows 经典）</option>
+                <option value="dark" data-i18n="set_theme_dark">深色（中性灰）</option>
+              </select>
+            </div>
+            <div class="setting-row">
+              <span class="setting-label" data-i18n="set_language">界面语言</span>
+              <select id="setLanguage">
+                <option value="zh-CN">简体中文</option>
+                <option value="en">English</option>
+              </select>
+            </div>
+            <div class="setting-row">
+              <span class="setting-label" data-i18n="set_profile">游戏机档案</span>
+              <select id="setProfile">
+                <option value="xbox">Xbox Series X|S</option>
+                <option value="ps5">PS5（轻量）</option>
+                <option value="generic">Generic / 通用主机</option>
+              </select>
+            </div>
+            <div class="setting-row">
+              <span class="setting-label" data-i18n="set_eth">有线网卡</span>
+              <select id="setEth">
+                <option value="" data-i18n="set_eth_auto">自动识别（推荐）</option>
+              </select>
+            </div>
+            <div class="setting-row">
+              <span class="setting-label" data-i18n="set_host_ip">电脑有线 IP</span>
+              <input id="setHostIp" class="mono" value="192.168.50.2" />
+            </div>
+            <div class="setting-row">
+              <span class="setting-label" data-i18n="set_peer_ip">游戏机静态 IP</span>
+              <input id="setPeerIp" class="mono" value="192.168.50.1" />
             </div>
           </div>
-        </div>
 
-        <div class="step-card" id="wizStep4">
-          <div class="step-row">
-            <div>
-              <div class="step-title"><span id="wizS4Badge" class="sev-badge idle">○ 待命</span><span data-i18n="wiz_s4_title">4. 主机静态参数 & 连通验收</span></div>
-              <div class="step-desc" data-i18n="wiz_s4_desc">在游戏机网络设置中填入下方 4 行参数（仅需一次）</div>
-            </div>
-            <div style="display:flex;gap:8px;">
-              <button class="btn-sm" id="btnWizCopyIp" type="button" data-i18n="wiz_copy_params">一键复制参数</button>
-              <button class="btn-sm primary" id="btnWizTestPeer" type="button" data-i18n="wiz_test_peer">测试主机连通</button>
+          <div class="sec-label" data-i18n="set_maint">网卡维护与目录</div>
+          <div class="group-box">
+            <div class="setting-row">
+              <button class="btn btn-sm btn-danger" id="btnResetNic" type="button" data-i18n="set_reset_nic">恢复网卡出厂 DHCP</button>
+              <div class="row-actions">
+                <button class="btn btn-sm" id="btnOpenLogs" type="button" data-i18n="set_open_logs">日志目录</button>
+                <button class="btn btn-sm" id="btnOpenData" type="button" data-i18n="set_open_data">数据目录</button>
+              </div>
             </div>
           </div>
-          <div class="ip-card">
-            <div><div class="ip-item-label">IP</div><div class="ip-item-val mono" id="cardPeerIp">192.168.50.1</div></div>
-            <div><div class="ip-item-label">Mask</div><div class="ip-item-val mono" id="cardMask">255.255.255.0</div></div>
-            <div><div class="ip-item-label">Gateway</div><div class="ip-item-val mono" id="cardHostIp">192.168.50.2</div></div>
-            <div><div class="ip-item-label">DNS</div><div class="ip-item-val mono" id="cardDns">223.5.5.5 / 8.8.8.8</div></div>
-          </div>
-          <div class="tip-box" data-i18n="wiz_headless_tip">无显示器首次配置？可先借屏幕或旧采集卡 5 分钟打开「启用远程功能」。</div>
-        </div>
-      </div>
-    </main>
-
-    <!-- VIEW C: AI / DSH PORT -->
-    <main class="view" id="viewAi">
-      <div class="subview-head">
-        <div>
-          <div class="subview-title" data-i18n="ai_title">AI / DSH 协作接口</div>
-          <div class="subview-sub" data-i18n="ai_sub">遇到陌生网络故障时，让 DSH 直接读取现场并热写扩展</div>
-        </div>
-        <button class="icon-btn" data-go="home" type="button" data-i18n="btn_back">返回主控台</button>
-      </div>
-
-      <section class="panel-card">
-        <div class="step-row">
-          <div>
-            <div class="step-title">DSH / AI 现场交接</div>
-            <div class="step-desc mono" id="aiCliHint">wiredeck-cli.exe diagnose --json</div>
-          </div>
-          <div style="display:flex;gap:8px;">
-            <button class="btn-sm primary" id="btnAiExportCopy" type="button" data-i18n="ai_copy_btn">导出脱敏包并复制给 AI</button>
-            <button class="btn-sm" id="btnOpenExtFolder" type="button" data-i18n="ai_open_ext">打开扩展目录</button>
-          </div>
-        </div>
-      </section>
-
-      <section class="panel-card">
-        <div class="step-title" data-i18n="ai_ext_heading">已加载热扩展 (extensions/)</div>
-        <div id="extList" class="step-list"></div>
-      </section>
-
-      <section class="panel-card">
-        <div class="step-row">
-          <div>
-            <div class="step-title" data-i18n="ai_bridge_heading">本地 HTTP Bridge（默认关闭）</div>
-            <div class="step-desc" data-i18n="ai_bridge_desc">仅监听 127.0.0.1 随机端口，带 32 字节随机 Token；特权操作需界面确认。</div>
-          </div>
-          <label class="switch">
-            <input type="checkbox" id="bridgeToggle" />
-            <span class="slider"></span>
-          </label>
-        </div>
-        <div id="bridgeDetails" class="bridge-box" style="display:none;">
-          <div>URL: <span class="mono" id="bridgeUrl"></span></div>
-          <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
-            <span>Bearer Token: <span class="mono" id="bridgeTokenMask"></span></span>
-            <button class="btn-sm" id="btnCopyToken" type="button" data-i18n="ai_bridge_copy">复制 Token</button>
-          </div>
-        </div>
-      </section>
-    </main>
-  </div>
-
-  <!-- Settings Modal -->
-  <div class="modal-backdrop" id="settingsModal">
-    <div class="modal">
-      <div class="modal-title" data-i18n="settings_title">设置</div>
-      <div class="form-grid">
-        <div class="field">
-          <label data-i18n="set_language">界面语言</label>
-          <select id="setLanguage">
-            <option value="zh-CN">简体中文</option>
-            <option value="en">English</option>
-          </select>
-        </div>
-        <div class="field">
-          <label data-i18n="set_profile">游戏机档案</label>
-          <select id="setProfile">
-            <option value="xbox">Xbox Series X|S</option>
-            <option value="ps5">PS5 (轻量)</option>
-            <option value="generic">Generic / 通用主机</option>
-          </select>
-        </div>
-        <div class="field full">
-          <label data-i18n="set_eth">有线网卡</label>
-          <select id="setEth">
-            <option value="" data-i18n="set_eth_auto">自动识别（推荐）</option>
-          </select>
-        </div>
-        <div class="field">
-          <label data-i18n="set_host_ip">电脑有线 IP</label>
-          <input id="setHostIp" class="mono" value="192.168.50.2" />
-        </div>
-        <div class="field">
-          <label data-i18n="set_peer_ip">游戏机静态 IP</label>
-          <input id="setPeerIp" class="mono" value="192.168.50.1" />
-        </div>
-      </div>
-      <div style="display:flex;gap:8px;flex-wrap:wrap;padding-top:4px;">
-        <button class="btn-sm danger" id="btnResetNic" type="button" data-i18n="set_reset_nic">恢复网卡出厂 DHCP</button>
-        <button class="btn-sm" id="btnOpenLogs" type="button" data-i18n="set_open_logs">打开日志目录</button>
-        <button class="btn-sm" id="btnOpenData" type="button" data-i18n="set_open_data">打开数据目录</button>
-      </div>
-      <div class="modal-actions">
-        <button class="btn-sm" id="btnCloseSettings" type="button" data-i18n="btn_cancel">取消</button>
-        <button class="btn-sm primary" id="btnSaveSettings" type="button" data-i18n="btn_save">保存设置</button>
-      </div>
+        </section>
+      </main>
     </div>
+
+    <!-- Classic Desktop Bottom Status Bar -->
+    <footer class="statusbar">
+      <div class="sb-group">
+        <span id="sbProfile">Xbox Series X|S</span>
+        <span class="sb-sep">|</span>
+        <span class="mono" id="sbSubnet">192.168.50.2 → 192.168.50.1</span>
+      </div>
+      <div class="sb-group">
+        <button class="sb-link" id="btnLaunchStream" type="button" data-i18n="footer_launch">启动串流端</button>
+        <span class="sb-sep">|</span>
+        <button class="sb-link" id="btnCopyAiQuick" type="button" data-i18n="footer_copy_ai">复制现场给 AI</button>
+      </div>
+    </footer>
   </div>
 
   <!-- Confirm Foreign NetNat Modal -->
@@ -275,31 +286,31 @@
       <div class="modal-title" id="confirmTitle" data-i18n="confirm_netnat_title">确认清理其他 NAT 规则</div>
       <div class="modal-body" id="confirmBody" data-i18n="confirm_netnat_body"></div>
       <div class="modal-actions">
-        <button class="btn-sm" id="btnConfirmCancel" type="button" data-i18n="btn_cancel">取消</button>
-        <button class="btn-sm danger" id="btnConfirmOk" type="button" data-i18n="btn_confirm">确认</button>
+        <button class="btn btn-sm" id="btnConfirmCancel" type="button" data-i18n="btn_cancel">取消</button>
+        <button class="btn btn-sm btn-danger" id="btnConfirmOk" type="button" data-i18n="btn_confirm">确认</button>
       </div>
     </div>
   </div>
 
-  <!-- Node Detail Popover Modal -->
+  <!-- Node Detail Dialog -->
   <div class="modal-backdrop" id="detailModal">
     <div class="modal">
       <div class="modal-title" id="detailTitle"></div>
       <div class="modal-body" id="detailBody"></div>
       <div class="modal-actions">
-        <button class="btn-sm primary" id="btnCloseDetail" type="button" data-i18n="btn_close">关闭</button>
+        <button class="btn btn-sm btn-primary" id="btnCloseDetail" type="button" data-i18n="btn_close">关闭</button>
       </div>
     </div>
   </div>
 
-  <!-- Bridge Approval Modal -->
+  <!-- Bridge Approval Dialog -->
   <div class="modal-backdrop" id="bridgeModal">
     <div class="modal">
       <div class="modal-title" data-i18n="bridge_req_title">外部 AI 请求执行特权操作</div>
       <div class="modal-body mono" id="bridgeReqBody"></div>
       <div class="modal-actions">
-        <button class="btn-sm" id="btnBridgeDeny" type="button" data-i18n="bridge_req_deny">拒绝</button>
-        <button class="btn-sm primary" id="btnBridgeAllow" type="button" data-i18n="bridge_req_allow">授权并执行</button>
+        <button class="btn btn-sm" id="btnBridgeDeny" type="button" data-i18n="bridge_req_deny">拒绝</button>
+        <button class="btn btn-sm btn-primary" id="btnBridgeAllow" type="button" data-i18n="bridge_req_allow">授权并执行</button>
       </div>
     </div>
   </div>

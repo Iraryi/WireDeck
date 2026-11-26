@@ -7,10 +7,6 @@ DialogFontName=Microsoft YaHei UI
 DialogFontSize=9
 WelcomeFontName=Microsoft YaHei UI
 WelcomeFontSize=12
-TitleFontName=Microsoft YaHei UI
-TitleFontSize=24
-CopyrightFontName=Microsoft YaHei UI
-CopyrightFontSize=9
 
 [Messages]
 SetupAppTitle=安装
@@ -38,8 +34,12 @@ SelectTasksLabel2=选择安装 [name] 时希望执行的附加任务，然后点
 WizardReady=准备安装
 ReadyLabel1=安装程序现已准备好在您的电脑上安装 [name]。
 ReadyLabel2a=点击“安装”继续，或点击“上一步”调整设置。
+ReadyMemoDir=目标文件夹：
+ReadyMemoTasks=附加任务：
 WizardInstalling=正在安装
 InstallingLabel=正在安装 [name]，请稍候...
+WizardUninstalling=正在卸载
+StatusUninstalling=正在卸载 %1...
 FinishedHeadingLabel=[name] 安装完成
 FinishedLabelNoIcons=安装程序已完成 [name] 的安装。
 FinishedLabel=安装程序已完成 [name] 的安装。您可以立即启动或从快捷方式打开。

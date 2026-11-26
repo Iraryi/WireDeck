@@ -168,7 +168,10 @@ begin
       if UninstallSilent then
       begin
         { Silent uninstall cannot safely force interactive UAC; record explicit warning log }
-        LogDir := ExpandConstant('{localappdata}\WireDeck\logs');
+        if FileExists(ExpandConstant('{app}\portable.mode')) then
+          LogDir := ExpandConstant('{app}\data\logs')
+        else
+          LogDir := ExpandConstant('{localappdata}\WireDeck\logs');
         ForceDirectories(LogDir);
         LogFile := LogDir + '\uninstall_warning.log';
         SaveStringToFile(LogFile,

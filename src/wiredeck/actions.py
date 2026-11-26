@@ -121,6 +121,34 @@ $dns = @((Get-DnsClientServerAddress -InterfaceAlias $alias -AddressFamily IPv4 
             pass
 
 
+def _save_direct_state(paths: AppPaths, eth_name: str, uplink_name: str) -> None:
+    paths.runtime_dir.mkdir(parents=True, exist_ok=True)
+    state_path = paths.runtime_dir / "direct_state.json"
+    managed = [n for n in (eth_name, uplink_name) if n]
+    payload = {
+        "updated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "eth_interface": eth_name,
+        "uplink_interface": uplink_name,
+        "forwarding_interfaces": managed,
+    }
+    state_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def _load_direct_state_interfaces(paths: AppPaths) -> list[str]:
+    state_path = paths.runtime_dir / "direct_state.json"
+    if not state_path.is_file():
+        return []
+    try:
+        parsed = json.loads(state_path.read_text(encoding="utf-8-sig"))
+        if isinstance(parsed, dict):
+            raw = parsed.get("forwarding_interfaces") or []
+            if isinstance(raw, list):
+                return [str(x) for x in raw if isinstance(x, str) and x.strip()]
+    except Exception:
+        pass
+    return []
+
+
 def _enable_direct(
     paths: AppPaths,
     cfg: AppConfig,
@@ -128,7 +156,19 @@ def _enable_direct(
     snapshot_fn: Callable[..., dict[str, Any]],
 ) -> ActionResult:
     snapshot = snapshot_fn(cfg, probe_network=False)
-    report = classify_snapshot(snapshot, cfg)
+    ext_results = []
+    try:
+        from wiredeck.extensions import run_auto_check_extensions
+
+        ext_results = [
+            r
+            for r in run_auto_check_extensions(paths)
+            if r.layer in ("L1", "L3") and r.code != "EXT_ERROR"
+        ]
+    except Exception:
+        ext_results = []
+
+    report = classify_snapshot(snapshot, cfg, ext_results=ext_results)
 
     l3 = next(l for l in report.layers if l.layer == "L3")
     l3_block = next((f for f in l3.faults if f.severity == Severity.FAIL), None)
@@ -153,7 +193,11 @@ def _enable_direct(
         log_file = _append_bom_log(paths, "enable-direct", [f"BLOCKED by L1: {code} - {msg}"])
         return ActionResult(ok=False, code=code, message=msg, exit_code=2, log_file=log_file)
 
-    eth = select_ethernet_adapter(snapshot.get("net_adapters") or [], cfg.ethernet_interface)
+    eth = select_ethernet_adapter(
+        snapshot.get("net_adapters") or [],
+        cfg.ethernet_interface,
+        default_routes=snapshot.get("default_routes") or [],
+    )
     if eth is None:
         log_file = _append_bom_log(paths, "enable-direct", ["ERROR: no Ethernet adapter found"])
         return ActionResult(
@@ -171,10 +215,15 @@ def _enable_direct(
 
     _save_nic_backup_once(paths, eth_name, snapshot, runner)
 
-    uplink_fwd_cmd = (
-        f"Set-NetIPInterface -InterfaceAlias {_ps_quote(uplink_name)} -AddressFamily IPv4 -Forwarding Enabled"
+    uplink_fwd_on = (
+        f"  Set-NetIPInterface -InterfaceAlias {_ps_quote(uplink_name)} -AddressFamily IPv4 -Forwarding Enabled"
         if uplink_name
-        else "# No distinct uplink interface detected"
+        else "  # No distinct uplink interface detected"
+    )
+    uplink_fwd_rollback = (
+        f"  Set-NetIPInterface -InterfaceAlias {_ps_quote(uplink_name)} -AddressFamily IPv4 -Forwarding Disabled -ErrorAction SilentlyContinue"
+        if uplink_name
+        else ""
     )
 
     script = f"""
@@ -206,18 +255,28 @@ if (-not $hasTarget) {{
 }}
 Set-DnsClientServerAddress -InterfaceAlias $eth -ResetServerAddresses -ErrorAction SilentlyContinue
 
-# Enable IPv4 forwarding on wired + uplink interfaces
-Set-NetIPInterface -InterfaceAlias $eth -AddressFamily IPv4 -Forwarding Enabled
-{uplink_fwd_cmd}
+try {{
+  # Enable IPv4 forwarding on wired + uplink interfaces
+  Set-NetIPInterface -InterfaceAlias $eth -AddressFamily IPv4 -Forwarding Enabled
+{uplink_fwd_on}
 
-# Create clean WinNAT instance
-New-NetNat -Name $natName -InternalIPInterfaceAddressPrefix $subnet | Out-Null
+  # Create clean WinNAT instance
+  New-NetNat -Name $natName -InternalIPInterfaceAddressPrefix $subnet | Out-Null
 
-# Ensure scoped firewall rules for the direct subnet only
-Remove-NetFirewallRule -DisplayName $fwNat -ErrorAction SilentlyContinue
-New-NetFirewallRule -DisplayName $fwNat -Direction Inbound -Action Allow -RemoteAddress $subnet -Profile Any -Enabled True | Out-Null
-Remove-NetFirewallRule -DisplayName $fwDirect -ErrorAction SilentlyContinue
-New-NetFirewallRule -DisplayName $fwDirect -Direction Outbound -Action Allow -RemoteAddress $subnet -Profile Any -Enabled True | Out-Null
+  # Ensure scoped firewall rules for the direct subnet only
+  Remove-NetFirewallRule -DisplayName $fwNat -ErrorAction SilentlyContinue
+  New-NetFirewallRule -DisplayName $fwNat -Direction Inbound -Action Allow -RemoteAddress $subnet -Profile Any -Enabled True | Out-Null
+  Remove-NetFirewallRule -DisplayName $fwDirect -ErrorAction SilentlyContinue
+  New-NetFirewallRule -DisplayName $fwDirect -Direction Outbound -Action Allow -RemoteAddress $subnet -Profile Any -Enabled True | Out-Null
+}} catch {{
+  # Roll back partial Forwarding/NAT state so a mid-flight failure never leaves dirty routing
+  Get-NetNat -Name $natName -ErrorAction SilentlyContinue | Remove-NetNat -Confirm:$false -ErrorAction SilentlyContinue
+  Remove-NetFirewallRule -DisplayName $fwNat -ErrorAction SilentlyContinue
+  Remove-NetFirewallRule -DisplayName $fwDirect -ErrorAction SilentlyContinue
+  Set-NetIPInterface -InterfaceAlias $eth -AddressFamily IPv4 -Forwarding Disabled -ErrorAction SilentlyContinue
+{uplink_fwd_rollback}
+  throw
+}}
 
 Write-Output "ENABLE_DIRECT_OK"
 """
@@ -236,11 +295,12 @@ Write-Output "ENABLE_DIRECT_OK"
         return ActionResult(
             ok=False,
             code="ENABLE_DIRECT_FAILED",
-            message="开启游戏直连失败，请查看操作日志",
+            message="开启游戏直连失败，已回滚转发设置，请查看日志",
             exit_code=1,
             details={"stderr": res.stderr.strip()},
             log_file=log_file,
         )
+    _save_direct_state(paths, eth_name, uplink_name)
     return ActionResult(
         ok=True,
         code="DIRECT_ENABLED",
@@ -258,7 +318,11 @@ def _disable_direct(
     snapshot_fn: Callable[..., dict[str, Any]],
 ) -> ActionResult:
     snapshot = snapshot_fn(cfg, probe_network=False)
-    eth = select_ethernet_adapter(snapshot.get("net_adapters") or [], cfg.ethernet_interface)
+    eth = select_ethernet_adapter(
+        snapshot.get("net_adapters") or [],
+        cfg.ethernet_interface,
+        default_routes=snapshot.get("default_routes") or [],
+    )
     eth_name = str(eth["name"]) if eth else cfg.ethernet_interface
     uplink = select_uplink_adapter(
         snapshot.get("net_adapters") or [],
@@ -268,18 +332,17 @@ def _disable_direct(
     )
     uplink_name = str(uplink["name"]) if uplink else cfg.uplink_interface
 
+    # Strictly scope Forwarding Disabled to WireDeck-managed physical interfaces ONLY
+    # (never disable Forwarding on third-party VPN TUN, WSL, Hyper-V, or VMware adapters!)
     fwd_targets: list[str] = []
-    for name in (eth_name, uplink_name):
+    for name in (*_load_direct_state_interfaces(paths), eth_name, uplink_name):
         if name and name not in fwd_targets:
             fwd_targets.append(name)
-    for alias, enabled in (snapshot.get("ip_forwarding") or {}).items():
-        if enabled and alias and alias not in fwd_targets:
-            fwd_targets.append(str(alias))
 
     disable_fwd_lines = "\n".join(
         f"Set-NetIPInterface -InterfaceAlias {_ps_quote(name)} -AddressFamily IPv4 -Forwarding Disabled -ErrorAction SilentlyContinue"
         for name in fwd_targets
-    ) or "# No interfaces with forwarding enabled"
+    ) or "# No WireDeck-managed interfaces detected"
 
     # Intentionally preserve static 192.168.50.2/24 (no gateway) for instant re-toggle
     script = f"""
@@ -295,6 +358,11 @@ Remove-NetFirewallRule -DisplayName $fwDirect -ErrorAction SilentlyContinue
 Write-Output "DISABLE_DIRECT_OK"
 """
     res = runner(script, 30)
+    if res.returncode == 0:
+        try:
+            (paths.runtime_dir / "direct_state.json").unlink(missing_ok=True)
+        except OSError:
+            pass
     log_file = _append_bom_log(
         paths,
         "disable-direct",
@@ -331,8 +399,19 @@ def _reset_nic(
     snapshot_fn: Callable[..., dict[str, Any]],
 ) -> ActionResult:
     snapshot = snapshot_fn(cfg, probe_network=False)
-    eth = select_ethernet_adapter(snapshot.get("net_adapters") or [], cfg.ethernet_interface)
+    eth = select_ethernet_adapter(
+        snapshot.get("net_adapters") or [],
+        cfg.ethernet_interface,
+        default_routes=snapshot.get("default_routes") or [],
+    )
     eth_name = str(eth["name"]) if eth else cfg.ethernet_interface
+    uplink = select_uplink_adapter(
+        snapshot.get("net_adapters") or [],
+        snapshot.get("default_routes") or [],
+        eth_name,
+        cfg.uplink_interface,
+    )
+    uplink_name = str(uplink["name"]) if uplink else cfg.uplink_interface
 
     backup_path = paths.runtime_dir / "nic_backup.json"
     backup_data: dict[str, Any] | None = None
@@ -352,29 +431,73 @@ def _reset_nic(
             ok=False, code="NIC_NOT_FOUND", message="未找到可重置的有线网卡", exit_code=1, log_file=log_file
         )
 
-    # First ensure WireDeckNat + forwarding are cleaned up, then restore DHCP (or saved static)
+    fwd_targets: list[str] = []
+    for name in (*_load_direct_state_interfaces(paths), eth_name, uplink_name):
+        if name and name not in fwd_targets:
+            fwd_targets.append(name)
+    disable_fwd_lines = "\n".join(
+        f"Set-NetIPInterface -InterfaceAlias {_ps_quote(name)} -AddressFamily IPv4 -Forwarding Disabled -ErrorAction SilentlyContinue"
+        for name in fwd_targets
+    )
+
+    restore_static = (
+        backup_data is not None
+        and backup_data.get("dhcp") is False
+        and isinstance(backup_data.get("ips"), list)
+        and len(backup_data["ips"]) > 0
+    )
+
+    if restore_static and backup_data is not None:
+        static_lines: list[str] = [
+            "Get-NetIPAddress -InterfaceAlias $eth -AddressFamily IPv4 -ErrorAction SilentlyContinue | Remove-NetIPAddress -Confirm:$false -ErrorAction SilentlyContinue",
+            "Set-NetIPInterface -InterfaceAlias $eth -AddressFamily IPv4 -Dhcp Disabled -ErrorAction SilentlyContinue",
+        ]
+        for cidr in backup_data["ips"]:
+            if isinstance(cidr, str) and "/" in cidr:
+                ip_part, pfx_part = cidr.split("/", 1)
+                if ip_part.strip() and pfx_part.strip().isdigit():
+                    static_lines.append(
+                        f"New-NetIPAddress -InterfaceAlias $eth -IPAddress {_ps_quote(ip_part.strip())} -PrefixLength {int(pfx_part.strip())} -ErrorAction SilentlyContinue | Out-Null"
+                    )
+        saved_dns = [str(d).strip() for d in (backup_data.get("dns") or []) if isinstance(d, str) and d.strip()]
+        if saved_dns:
+            dns_lit = ",".join(_ps_quote(d) for d in saved_dns)
+            static_lines.append(
+                f"Set-DnsClientServerAddress -InterfaceAlias $eth -ServerAddresses @({dns_lit}) -ErrorAction SilentlyContinue"
+            )
+        else:
+            static_lines.append(
+                "Set-DnsClientServerAddress -InterfaceAlias $eth -ResetServerAddresses -ErrorAction SilentlyContinue"
+            )
+        ip_restore_block = "\n".join(static_lines)
+    else:
+        ip_restore_block = (
+            "Get-NetIPAddress -InterfaceAlias $eth -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object { $_.PrefixOrigin -eq 'Manual' } | Remove-NetIPAddress -Confirm:$false -ErrorAction SilentlyContinue\n"
+            "Set-NetIPInterface -InterfaceAlias $eth -AddressFamily IPv4 -Dhcp Enabled -ErrorAction SilentlyContinue\n"
+            "Set-DnsClientServerAddress -InterfaceAlias $eth -ResetServerAddresses -ErrorAction SilentlyContinue"
+        )
+
     script = f"""
 $eth = {_ps_quote(eth_name)}
 Get-NetNat -Name {_ps_quote(NAT_NAME)} -ErrorAction SilentlyContinue | Remove-NetNat -Confirm:$false -ErrorAction SilentlyContinue
 Remove-NetFirewallRule -DisplayName {_ps_quote(FW_RULE_NAT)} -ErrorAction SilentlyContinue
 Remove-NetFirewallRule -DisplayName {_ps_quote(FW_RULE_DIRECT)} -ErrorAction SilentlyContinue
-Set-NetIPInterface -InterfaceAlias $eth -AddressFamily IPv4 -Forwarding Disabled -ErrorAction SilentlyContinue
-Get-NetIPAddress -InterfaceAlias $eth -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object {{ $_.PrefixOrigin -eq 'Manual' }} | Remove-NetIPAddress -Confirm:$false -ErrorAction SilentlyContinue
-Set-NetIPInterface -InterfaceAlias $eth -AddressFamily IPv4 -Dhcp Enabled -ErrorAction SilentlyContinue
-Set-DnsClientServerAddress -InterfaceAlias $eth -ResetAddresses -ErrorAction SilentlyContinue
+{disable_fwd_lines}
+{ip_restore_block}
 Write-Output "RESET_NIC_OK"
 """
     res = runner(script, 30)
-    if res.returncode == 0 and backup_path.is_file():
-        try:
-            backup_path.unlink()
-        except OSError:
-            pass
+    if res.returncode == 0:
+        for stale in (backup_path, paths.runtime_dir / "direct_state.json"):
+            try:
+                stale.unlink(missing_ok=True)
+            except OSError:
+                pass
     log_file = _append_bom_log(
         paths,
         "reset-nic",
         [
-            f"eth={eth_name}, had_valid_backup={backup_data is not None}",
+            f"eth={eth_name}, restore_static={restore_static}, fwd_disabled={fwd_targets}",
             f"returncode={res.returncode}",
             f"stderr={res.stderr.strip()}",
         ],
@@ -383,17 +506,22 @@ Write-Output "RESET_NIC_OK"
         return ActionResult(
             ok=False,
             code="RESET_NIC_FAILED",
-            message="恢复网卡 DHCP 失败",
+            message="恢复网卡配置失败",
             exit_code=1,
             details={"stderr": res.stderr.strip()},
             log_file=log_file,
         )
+    msg = (
+        f"已按备份快照恢复 {eth_name} 原有静态配置"
+        if restore_static
+        else f"已将 {eth_name} 恢复为出厂 DHCP 自动获取"
+    )
     return ActionResult(
         ok=True,
         code="NIC_RESET",
-        message=f"已将 {eth_name} 恢复为出厂 DHCP 自动获取",
+        message=msg,
         exit_code=0,
-        details={"eth": eth_name},
+        details={"eth": eth_name, "restored_static": restore_static},
         log_file=log_file,
     )
 

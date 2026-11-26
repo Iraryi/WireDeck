@@ -22,7 +22,12 @@ from wiredeck.extensions import (
     validate_extension_dir,
 )
 from wiredeck.models import ActionResult, Severity
-from wiredeck.paths import AppPaths, get_cli_executable, resolve_app_paths
+from wiredeck.paths import (
+    AppPaths,
+    get_cli_executable,
+    resolve_app_paths,
+    resolve_app_paths_from_data_dir,
+)
 from wiredeck.probes import collect_system_snapshot
 from wiredeck.ps_runner import is_admin, run_elevated_worker, run_powershell
 from wiredeck.version import APP_NAME, APP_VERSION, NAT_NAME, SCHEMA_VERSION
@@ -64,6 +69,11 @@ def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
 def _run_worker(req_path: Path, out_path: Path, paths: AppPaths, cfg: AppConfig) -> int:
     try:
         raw = json.loads(req_path.read_text(encoding="utf-8-sig"))
+        # Preserve the invoking user's data_dir even when UAC elevates as a separate Admin account
+        req_data_dir = raw.get("data_dir")
+        if isinstance(req_data_dir, str) and req_data_dir.strip():
+            paths = resolve_app_paths_from_data_dir(Path(req_data_dir), exe_dir=paths.exe_dir)
+            cfg = load_config(paths)
         action = str(raw.get("action") or "")
         force = bool(raw.get("force", False))
         ext_id = raw.get("ext_id")
@@ -121,7 +131,15 @@ def _dispatch_privileged_action(
     out_path = paths.runtime_dir / f"res_{job_token}.json"
     paths.runtime_dir.mkdir(parents=True, exist_ok=True)
     req_path.write_text(
-        json.dumps({"action": action, "force": force, "ext_id": ext_id}, ensure_ascii=False),
+        json.dumps(
+            {
+                "action": action,
+                "force": force,
+                "ext_id": ext_id,
+                "data_dir": str(paths.data_dir),
+            },
+            ensure_ascii=False,
+        ),
         encoding="utf-8",
     )
     try:

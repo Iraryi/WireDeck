@@ -182,7 +182,10 @@ def hash_file_sha256(path: Path) -> str:
 
 def launch_stream_client(prefer: str = "auto") -> ActionResult:
     """Launch installed XStreamingDesktop or Microsoft Xbox App."""
-    xs = detect_local_xstreaming_path()
+    clients = detect_stream_clients()
+    xs = clients.get("xstreaming_path")
+    xbox_installed = bool(clients.get("xbox_app_installed", False))
+
     if prefer in ("auto", "xstreaming") and xs:
         try:
             subprocess.Popen([xs], cwd=str(Path(xs).parent))
@@ -190,14 +193,14 @@ def launch_stream_client(prefer: str = "auto") -> ActionResult:
         except Exception as exc:
             return ActionResult(ok=False, code="LAUNCH_FAILED", message=f"启动 XStreaming 失败: {exc}", exit_code=1)
 
-    if prefer in ("auto", "xbox"):
+    if prefer in ("auto", "xbox") and xbox_installed:
         try:
             creationflags = CREATE_NO_WINDOW if os.name == "nt" else 0
             subprocess.Popen(
                 ["explorer.exe", r"shell:AppsFolder\Microsoft.GamingApp_8wekyb3d8bbwe!Microsoft.Xbox.App"],
                 creationflags=creationflags,
             )
-            return ActionResult(ok=True, code="LAUNCHED", message="已尝试启动微软 Xbox 应用")
+            return ActionResult(ok=True, code="LAUNCHED", message="已启动微软 Xbox 应用")
         except Exception as exc:
             return ActionResult(ok=False, code="LAUNCH_FAILED", message=f"启动 Xbox 应用失败: {exc}", exit_code=1)
 

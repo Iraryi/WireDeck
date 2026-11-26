@@ -15,7 +15,8 @@ if (-not (Test-Path $VenvPy)) {
 function Assert-UnderRepo {
     param([string]$TargetPath)
     $resolved = [System.IO.Path]::GetFullPath($TargetPath)
-    if (-not $resolved.StartsWith($RepoRoot, [System.StringComparison]::OrdinalIgnoreCase) -or $resolved -eq $RepoRoot) {
+    $prefix = $RepoRoot.TrimEnd('\') + '\'
+    if (-not $resolved.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase)) {
         throw "Refusing to clean unsafe path outside repo root: $resolved"
     }
     return $resolved

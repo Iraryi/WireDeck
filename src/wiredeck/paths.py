@@ -92,6 +92,38 @@ def ensure_within(root: Path, candidate: Path) -> Path:
     return cand_resolved
 
 
+def resolve_app_paths_from_data_dir(
+    data_dir: Path,
+    exe_dir: Path | None = None,
+    *,
+    create: bool = True,
+) -> AppPaths:
+    """Build AppPaths pinned to an explicit data_dir (used by elevated --worker)."""
+    resolved_exe_dir = Path(exe_dir).resolve() if exe_dir is not None else get_exe_dir()
+    resolved_data = Path(data_dir).resolve()
+    is_portable = (resolved_exe_dir / "portable.mode").is_file()
+    paths = AppPaths(
+        exe_dir=resolved_exe_dir,
+        is_portable=is_portable,
+        data_dir=resolved_data,
+        config_file=resolved_data / "config.json",
+        extensions_dir=resolved_data / "extensions",
+        logs_dir=resolved_data / "logs",
+        exports_dir=resolved_data / "exports",
+        runtime_dir=resolved_data / "runtime",
+    )
+    if create:
+        for d in (
+            paths.data_dir,
+            paths.extensions_dir,
+            paths.logs_dir,
+            paths.exports_dir,
+            paths.runtime_dir,
+        ):
+            d.mkdir(parents=True, exist_ok=True)
+    return paths
+
+
 def resolve_app_paths(
     exe_dir: Path | None = None,
     local_appdata: Path | None = None,

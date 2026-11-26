@@ -85,7 +85,7 @@
     const l5 = byId.L5 || { layer: "L5", status: "idle", summary: "待检测", faults: [] };
     const l6 = byId.L6 || { layer: "L6", status: "skipped", summary: "", faults: [] };
     const combinedStatus = severityRank(l6.status) > severityRank(l5.status) ? l6.status : l5.status;
-    const combinedSummary = l6.status === "warn" ? l6.summary : l5.summary;
+    const combinedSummary = severityRank(l5.status) >= severityRank(l6.status) ? l5.summary : l6.summary;
     const combinedNode = {
       key: "node_console",
       layerObj: {
@@ -113,9 +113,9 @@
       const card = document.createElement("div");
       card.className = `chain-node sev-${l.status}`;
       card.innerHTML = `
-        <div class="node-name">${t(n.key)}</div>
-        <div class="sev-badge ${l.status}">${sevLabel(l.status)}</div>
-        <div class="node-summary">${l.summary || "—"}</div>
+        <div class="node-name">${escapeHtml(t(n.key))}</div>
+        <div class="sev-badge ${escapeHtml(l.status)}">${escapeHtml(sevLabel(l.status))}</div>
+        <div class="node-summary">${escapeHtml(l.summary || "—")}</div>
       `;
       card.addEventListener("click", () => openNodeDetail(t(n.key), l));
       grid.appendChild(card);
@@ -544,7 +544,11 @@
       state.activeBridgeJob = null;
       if (job && getApi()) {
         showToast(t("toast_working"));
-        await getApi().approve_bridge_job(job.job_id, true);
+        const res = await getApi().approve_bridge_job(job.job_id, true);
+        const jr = res && res.job && res.job.result;
+        if (jr && (jr.message || jr.code)) {
+          showToast(jr.message || jr.code);
+        }
         await refreshAll(true);
       }
     });

@@ -45,6 +45,7 @@ def is_admin() -> bool:
 def _encode_ps_script(script: str) -> str:
     preamble = (
         "$ErrorActionPreference = 'Stop'\n"
+        "$ProgressPreference = 'SilentlyContinue'\n"
         "[Console]::InputEncoding = [System.Text.UTF8Encoding]::new($false)\n"
         "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)\n"
         "$OutputEncoding = [System.Text.UTF8Encoding]::new($false)\n"
@@ -111,10 +112,16 @@ def run_ps_file(
     extra_env: dict[str, str] | None = None,
     cwd: Path | None = None,
 ) -> PsResult:
-    """Execute an existing .ps1 script file silently with UTF-8 stdout."""
-    escaped = str(script_path.resolve()).replace("'", "''")
-    wrapper = f"& '{escaped}'"
-    encoded = _encode_ps_script(wrapper)
+    """Execute an existing .ps1 script file silently with guaranteed UTF-8 parsing (even without BOM)."""
+    resolved = script_path.resolve()
+    try:
+        script_body = resolved.read_text(encoding="utf-8-sig")
+    except UnicodeDecodeError:
+        script_body = resolved.read_text(encoding="gb18030", errors="replace")
+    except OSError as exc:
+        return PsResult(returncode=1, stdout="", stderr=str(exc), timed_out=False)
+
+    encoded = _encode_ps_script(script_body)
     cmd = [
         "powershell.exe",
         "-NoLogo",
@@ -139,7 +146,7 @@ def run_ps_file(
             errors="replace",
             timeout=timeout,
             env=env,
-            cwd=str(cwd) if cwd else None,
+            cwd=str(cwd or resolved.parent),
             creationflags=creationflags,
         )
         return PsResult(
@@ -216,7 +223,7 @@ def run_elevated_worker(
                 str(out_path.resolve()),
             ]
         )
-        work_dir = str(Path(__file__).resolve().parents[2])
+        work_dir = str(Path(__file__).resolve().parents[1])
 
     sei = _SHELLEXECUTEINFOW()
     sei.cbSize = ctypes.sizeof(_SHELLEXECUTEINFOW)

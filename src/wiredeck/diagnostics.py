@@ -28,11 +28,18 @@ TUN_KEYWORD_RE = re.compile(
 HW_ERROR_WARN_THRESHOLD = 50
 
 
+TETHER_HOTSPOT_RE = re.compile(
+    r"(rndis|remote\s*ndis|mobile\s*broadband|apple\s*mobile\s*device|cellular|wwan|usb\s*tether)",
+    re.IGNORECASE,
+)
+
+
 def select_ethernet_adapter(
     net_adapters: list[dict[str, Any]],
     preferred_name: str = "",
+    default_routes: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any] | None:
-    """Dynamically pick the primary physical wired Ethernet adapter."""
+    """Dynamically pick the primary physical wired Ethernet adapter (avoiding USB hotspots)."""
     physical = [
         a
         for a in net_adapters
@@ -45,6 +52,21 @@ def select_ethernet_adapter(
             if a.get("name") == preferred_name:
                 return a
 
+    uplink_aliases = {
+        str(r.get("interface_alias", ""))
+        for r in (default_routes or [])
+        if not r.get("is_virtual_or_tun", False)
+    }
+
+    def _is_tether_or_uplink(a: dict[str, Any]) -> bool:
+        desc = str(a.get("interface_description", ""))
+        name = str(a.get("name", ""))
+        return bool(TETHER_HOTSPOT_RE.search(desc)) or (name in uplink_aliases)
+
+    # Prefer dedicated wired Ethernet NICs over USB cellular/RNDIS tethering uplinks
+    dedicated = [a for a in physical if not _is_tether_or_uplink(a)]
+    candidates = dedicated if dedicated else physical
+
     def _score(a: dict[str, Any]) -> tuple[int, int, int]:
         status = str(a.get("status", "")).lower()
         is_up = 2 if status == "up" else (1 if status != "disabled" else 0)
@@ -52,7 +74,7 @@ def select_ethernet_adapter(
         not_disabled = 1 if status != "disabled" else 0
         return (is_up, speed, not_disabled)
 
-    return max(physical, key=_score)
+    return max(candidates, key=_score)
 
 
 def select_uplink_adapter(
@@ -132,7 +154,7 @@ def classify_snapshot(
     stream_clients = dict(snapshot.get("stream_clients") or {})
     connectivity = dict(snapshot.get("connectivity") or {})
 
-    eth = select_ethernet_adapter(net_adapters, cfg.ethernet_interface)
+    eth = select_ethernet_adapter(net_adapters, cfg.ethernet_interface, default_routes=default_routes)
     eth_name = str(eth.get("name", "")) if eth else ""
     uplink = select_uplink_adapter(net_adapters, default_routes, eth_name, cfg.uplink_interface)
     uplink_name = str(uplink.get("name", "")) if uplink else ""
@@ -550,7 +572,10 @@ def classify_snapshot(
                 )
             )
 
-        if peer_ok is True:
+        if inet_ok is False:
+            l5_summary = "外网不通"
+            l5_base_status = Severity.OK
+        elif peer_ok is True:
             rtt = connectivity.get("peer_rtt_ms")
             l5_summary = f"{rtt:.1f} ms" if isinstance(rtt, (int, float)) else "已连通"
             l5_base_status = Severity.OK
@@ -680,8 +705,20 @@ def classify_snapshot(
                     )
             active_faults = [f for f in target.faults if f.severity in (Severity.WARN, Severity.FAIL)]
             target.status = _layer_status_from_faults(active_faults, base_statuses[target.layer])
-            if target.status == Severity.FAIL and er.status == Severity.FAIL:
+            if not active_faults and target.status == Severity.OK:
+                healthy_defaults = {
+                    "L1": "正常",
+                    "L2": l2_summary,
+                    "L3": "通过",
+                    "L4": "已开启" if direct_active else "未开启",
+                    "L5": l5_summary,
+                    "L6": "已就绪",
+                }
+                target.summary = healthy_defaults.get(target.layer, "正常")
+            elif er.status == Severity.FAIL and target.status == Severity.FAIL:
                 target.summary = "扩展拦截"
+            elif er.status == Severity.WARN and target.status == Severity.WARN:
+                target.summary = "扩展提醒"
 
     # ---------------- Final Summary & Mode ----------------
     can_enable_direct = (l3.status != Severity.FAIL) and (l1.status != Severity.FAIL)

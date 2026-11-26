@@ -222,7 +222,15 @@ class WireDeckApi:
         out_path = self.paths.runtime_dir / f"res_{job_id}.json"
         self.paths.runtime_dir.mkdir(parents=True, exist_ok=True)
         req_path.write_text(
-            json.dumps({"action": action, "force": force, "ext_id": ext_id}, ensure_ascii=False),
+            json.dumps(
+                {
+                    "action": action,
+                    "force": force,
+                    "ext_id": ext_id,
+                    "data_dir": str(self.paths.data_dir),
+                },
+                ensure_ascii=False,
+            ),
             encoding="utf-8",
         )
         try:
@@ -360,7 +368,7 @@ class WireDeckApi:
         try:
             subprocess.run(
                 ["clip"],
-                input=text.encode("utf-16le"),
+                input=b"\xff\xfe" + text.encode("utf-16le"),
                 check=False,
                 creationflags=0x08000000 if os.name == "nt" else 0,
             )

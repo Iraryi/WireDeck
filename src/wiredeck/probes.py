@@ -376,28 +376,52 @@ def detect_local_xstreaming_path() -> str | None:
     return None
 
 
+def parse_ping_output(out: str) -> tuple[bool, float | None]:
+    """Parse Windows ping output across English/Chinese locales and reject unreachable rc=0."""
+    m = re.search(r"(?:time|时间)\s*([<=])\s*(\d+(?:\.\d+)?)\s*ms", out, re.IGNORECASE)
+    if m:
+        val = float(m.group(2))
+        if m.group(1) == "<" and val <= 1.0:
+            return True, 0.5
+        return True, val
+    if re.search(r"\bTTL\s*=\s*\d+", out, re.IGNORECASE):
+        return True, None
+    return False, None
+
+
+def _windows_oem_encoding() -> str:
+    if os.name == "nt":
+        try:
+            import ctypes
+
+            cp = int(ctypes.windll.kernel32.GetOEMCP())
+            if cp > 0:
+                return f"cp{cp}"
+        except Exception:
+            pass
+    import locale
+
+    return locale.getpreferredencoding(False) or "utf-8"
+
+
 def _ping_peer(peer_ip: str, timeout_ms: int = 600) -> tuple[bool, float | None]:
     creationflags = CREATE_NO_WINDOW if os.name == "nt" else 0
     try:
         proc = subprocess.run(
             ["ping", "-n", "1", "-w", str(timeout_ms), peer_ip],
             capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
             timeout=2.5,
             creationflags=creationflags,
         )
         if proc.returncode != 0:
             return False, None
-        out = proc.stdout
-        m = re.search(r"(?:time|时间)\s*([<=])\s*(\d+(?:\.\d+)?)\s*ms", out, re.IGNORECASE)
-        if m:
-            val = float(m.group(2))
-            if m.group(1) == "<" and val <= 1.0:
-                return True, 0.5
-            return True, val
-        return True, None
+        raw = proc.stdout or b""
+        enc = _windows_oem_encoding()
+        out = raw.decode(enc, errors="replace")
+        ok, rtt = parse_ping_output(out)
+        if not ok and enc.lower() != "utf-8":
+            ok, rtt = parse_ping_output(raw.decode("utf-8", errors="replace"))
+        return ok, rtt
     except Exception:
         return False, None
 

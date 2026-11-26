@@ -368,3 +368,98 @@ def test_parse_uwp_exemptions_works_on_chinese_and_english_windows():
         "microsoft.windowsstore_8wekyb3d8bbwe",
     ]
 
+
+def test_select_ethernet_avoids_usb_rndis_hotspot_holding_default_route():
+    cfg = AppConfig()
+    snap = _healthy_snapshot(direct_active=False)
+    # Onboard RJ45 is Disconnected (console off), while USB phone hotspot is Up & holds 0.0.0.0/0
+    snap["net_adapters"] = [
+        {
+            "name": "以太网",
+            "interface_description": "Realtek Gaming 2.5GbE Family Controller",
+            "interface_index": 12,
+            "status": "Disconnected",
+            "link_speed_bps": 0,
+            "link_speed_text": "0 bps",
+            "pnp_device_id": "PCI\\VEN_10EC&DEV_8125",
+            "is_virtual": False,
+            "is_wireless": False,
+            "rx_errors": 0,
+            "tx_errors": 0,
+            "rx_discards": 0,
+            "tx_discards": 0,
+            "powersave_enabled": [],
+        },
+        {
+            "name": "以太网 3",
+            "interface_description": "Remote NDIS based Internet Sharing Device",
+            "interface_index": 25,
+            "status": "Up",
+            "link_speed_bps": 425_000_000,
+            "link_speed_text": "425 Mbps",
+            "pnp_device_id": "USB\\VID_18D1",
+            "is_virtual": False,
+            "is_wireless": False,
+            "rx_errors": 0,
+            "tx_errors": 0,
+            "rx_discards": 0,
+            "tx_discards": 0,
+            "powersave_enabled": [],
+        },
+    ]
+    snap["default_routes"] = [
+        {
+            "interface_alias": "以太网 3",
+            "interface_index": 25,
+            "next_hop": "192.168.42.129",
+            "metric": 25,
+            "is_virtual_or_tun": False,
+            "interface_description": "Remote NDIS based Internet Sharing Device",
+        }
+    ]
+    report = classify_snapshot(snap, cfg)
+    l1 = next(l for l in report.layers if l.layer == "L1")
+    assert l1.metrics["selected_ethernet"] == "以太网"
+    assert l1.metrics["selected_uplink"] == "以太网 3"
+
+
+def test_summary_refreshes_on_extension_override_and_host_internet_down():
+    cfg = AppConfig()
+    snap = _healthy_snapshot(direct_active=True)
+    snap["net_adapters"][0]["powersave_enabled"] = ["*EEE"]
+    snap["connectivity"]["host_internet_ok"] = False
+
+    ext_ok = ExtensionRunResult(
+        ext_id="fix-eee",
+        name="自定义节能检测",
+        author="DSH",
+        layer="L1",
+        status=Severity.OK,
+        code="OK",
+        title="正常",
+        message="已确认无需处理",
+        overrides_faults=["NIC_POWERSAVE_ENABLED"],
+    )
+    rep = classify_snapshot(snap, cfg, ext_results=[ext_ok])
+    l1 = next(l for l in rep.layers if l.layer == "L1")
+    l5 = next(l for l in rep.layers if l.layer == "L5")
+    assert l1.status == Severity.OK
+    assert l1.summary == "正常"
+    assert l5.status == Severity.FAIL
+    assert l5.summary == "外网不通"
+
+
+def test_ping_parser_handles_cp936_chinese_and_rejects_destination_unreachable():
+    from wiredeck.probes import parse_ping_output
+
+    ok_cn, rtt_cn = parse_ping_output("来自 192.168.50.1 的回复: 字节=32 时间<1ms TTL=128")
+    assert ok_cn is True and rtt_cn == 0.5
+
+    ok_en, rtt_en = parse_ping_output("Reply from 192.168.50.1: bytes=32 time=0.4ms TTL=128")
+    assert ok_en is True and rtt_en == 0.4
+
+    # Windows ping exits 0 on 'Destination host unreachable' (no TTL= / time=)
+    ok_unreach, rtt_unreach = parse_ping_output("来自 192.168.50.2 的回复: 无法访问目标主机。")
+    assert ok_unreach is False and rtt_unreach is None
+
+

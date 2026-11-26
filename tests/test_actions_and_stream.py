@@ -220,17 +220,26 @@ def test_enable_direct_writes_nic_backup_once_and_configures_winnat_with_bom_log
     assert first_backup != ""
 
 
-def test_disable_direct_preserves_static_ip_and_works_without_backup(tmp_path: Path):
+def test_disable_direct_preserves_static_ip_and_does_not_touch_third_party_forwarding(tmp_path: Path):
     paths = resolve_app_paths(tmp_path / "app", local_appdata=tmp_path / "la")
     cfg = AppConfig()
     scripts: list[str] = []
+
+    snap = _base_snapshot()
+    # Third-party VPN TUN & Hyper-V adapters have Forwarding=True; WireDeck MUST NOT touch them!
+    snap["ip_forwarding"] = {
+        "以太网": True,
+        "WLAN": True,
+        "LightXtreme": True,
+        "vEthernet (WSL)": True,
+    }
 
     res = execute_action(
         "disable-direct",
         paths,
         cfg,
         runner=lambda s, t=30: (scripts.append(s) or PsResult(0, "OK", "")),
-        snapshot_fn=lambda *a, **kw: _base_snapshot(),
+        snapshot_fn=lambda *a, **kw: snap,
     )
     assert res.ok is True
     joined = "\n".join(scripts)
@@ -238,9 +247,11 @@ def test_disable_direct_preserves_static_ip_and_works_without_backup(tmp_path: P
     assert FW_RULE_NAT in joined
     assert "Forwarding Disabled" in joined
     assert "Dhcp Enabled" not in joined
+    assert "LightXtreme" not in joined
+    assert "vEthernet (WSL)" not in joined
 
 
-def test_reset_nic_handles_missing_and_corrupt_backup_gracefully(tmp_path: Path):
+def test_reset_nic_uses_valid_ps_param_restores_static_and_cleans_uplink_forwarding(tmp_path: Path):
     paths = resolve_app_paths(tmp_path / "app", local_appdata=tmp_path / "la")
     cfg = AppConfig()
     scripts: list[str] = []
@@ -256,7 +267,108 @@ def test_reset_nic_handles_missing_and_corrupt_backup_gracefully(tmp_path: Path)
     assert res.ok is True
     joined = "\n".join(scripts)
     assert "Dhcp Enabled" in joined
-    assert "ResetAddresses" in joined
+    assert "-ResetServerAddresses" in joined
+    assert "-ResetAddresses" not in joined
+    assert "WLAN" in joined and "Forwarding Disabled" in joined
+
+    # Also verify restoring non-DHCP static backup when valid backup exists
+    scripts2: list[str] = []
+    (paths.runtime_dir / "nic_backup.json").write_text(
+        json.dumps({"interface_alias": "以太网", "dhcp": False, "ips": ["10.0.0.5/24"], "dns": ["1.1.1.1"]}),
+        encoding="utf-8",
+    )
+    res2 = execute_action(
+        "reset-nic",
+        paths,
+        cfg,
+        runner=lambda s, t=30: (scripts2.append(s) or PsResult(0, "OK", "")),
+        snapshot_fn=lambda *a, **kw: _base_snapshot(),
+    )
+    assert res2.ok is True
+    joined2 = "\n".join(scripts2)
+    assert "10.0.0.5" in joined2
+    assert "1.1.1.1" in joined2
+
+
+def test_enable_direct_has_atomic_rollback_on_winnat_failure_and_honors_l3_extension(tmp_path: Path):
+    paths = resolve_app_paths(tmp_path / "app", local_appdata=tmp_path / "la")
+    cfg = AppConfig()
+    scripts: list[str] = []
+
+    res = execute_action(
+        "enable-direct",
+        paths,
+        cfg,
+        runner=lambda s, t=30: (scripts.append(s) or PsResult(0, "ENABLE_DIRECT_OK", "")),
+        snapshot_fn=lambda *a, **kw: _base_snapshot(),
+    )
+    assert res.ok is True
+    joined = "\n".join(scripts)
+    assert "try {" in joined and "catch {" in joined and "Forwarding Disabled" in joined
+    assert (paths.runtime_dir / "direct_state.json").is_file()
+
+    # Add an L3 auto_check extension returning fail -> must block enable-direct!
+    ext_dir = paths.extensions_dir / "l3-blocker"
+    ext_dir.mkdir(parents=True)
+    (ext_dir / "ext.json").write_text(
+        json.dumps(
+            {
+                "schema": "wiredeck-ext/v1",
+                "id": "l3-blocker",
+                "name": "自定义门禁",
+                "author": "DSH",
+                "enabled": True,
+                "auto_check": True,
+                "layer": "L3",
+                "overrides_faults": [],
+                "requires_admin": False,
+                "timeout_sec": 5,
+                "check_script": "check.ps1",
+                "description": "blocks direct",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (ext_dir / "check.ps1").write_text(
+        'Write-Output \'{"status":"fail","code":"EXT_L3_BLOCK","title":"扩展门禁","message":"自定义冲突阻止直连"}\'\n',
+        encoding="utf-8",
+    )
+    res_blocked = execute_action(
+        "enable-direct",
+        paths,
+        cfg,
+        runner=lambda s, t=30: PsResult(0, "OK", ""),
+        snapshot_fn=lambda *a, **kw: _base_snapshot(),
+    )
+    assert res_blocked.ok is False
+    assert res_blocked.exit_code == 2
+    assert res_blocked.code == "EXT_L3_BLOCK"
+
+
+def test_real_powershell_cmdlet_parameter_contract_and_quiet_progress():
+    from wiredeck.ps_runner import run_powershell
+
+    res = run_powershell(
+        "$cmd = Get-Command Set-DnsClientServerAddress; "
+        "$cmd.Parameters.ContainsKey('ResetServerAddresses')",
+        timeout=10,
+    )
+    assert res.returncode == 0
+    assert "True" in res.stdout
+    assert "#< CLIXML" not in res.stderr
+
+
+def test_launch_stream_client_returns_missing_when_neither_installed(monkeypatch: pytest.MonkeyPatch):
+    from wiredeck import stream_client
+
+    monkeypatch.setattr(
+        stream_client,
+        "detect_stream_clients",
+        lambda: {"xstreaming_path": None, "xbox_app_installed": False},
+    )
+    res = stream_client.launch_stream_client()
+    assert res.ok is False
+    assert res.code == "STREAM_CLIENT_MISSING"
 
 
 def test_clear_netnat_requires_force_and_clear_ics_never_kills_third_party(tmp_path: Path):

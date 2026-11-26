@@ -207,18 +207,53 @@ def test_cli_ext_list_validate_and_export_bundle(
     assert Path(exp["bundle_path"]).is_file()
 
 
-def test_cli_worker_executes_request_and_writes_atomic_result(
+def test_cli_worker_executes_request_and_preserves_invoking_user_data_dir(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
-    paths = resolve_app_paths(tmp_path / "app", local_appdata=tmp_path / "la")
-    monkeypatch.setattr(cli, "resolve_app_paths", lambda *a, **kw: paths)
+    admin_paths = resolve_app_paths(tmp_path / "app", local_appdata=tmp_path / "AdminB_AppData")
+    user_paths = resolve_app_paths(tmp_path / "app", local_appdata=tmp_path / "StandardUser_AppData")
+    monkeypatch.setattr(cli, "resolve_app_paths", lambda *a, **kw: admin_paths)
     monkeypatch.setattr(cli, "collect_system_snapshot", lambda *a, **kw: _mock_snapshot())
     monkeypatch.setattr(cli, "run_powershell", lambda script, timeout=30: PsResult(0, "OK", ""))
 
-    req_path = paths.runtime_dir / "req_test.json"
-    out_path = paths.runtime_dir / "res_test.json"
+    # Place extension ONLY in invoking standard user's data_dir (not AdminB's!)
+    ext_dir = user_paths.extensions_dir / "user-only-ext"
+    ext_dir.mkdir(parents=True)
+    (ext_dir / "ext.json").write_text(
+        json.dumps(
+            {
+                "schema": "wiredeck-ext/v1",
+                "id": "user-only-ext",
+                "name": "用户目录扩展",
+                "author": "DSH",
+                "enabled": True,
+                "auto_check": False,
+                "layer": "L1",
+                "overrides_faults": [],
+                "requires_admin": True,
+                "timeout_sec": 5,
+                "fix_script": "fix.ps1",
+                "description": "demo",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (ext_dir / "fix.ps1").write_text(
+        'Write-Output \'{"status":"ok","code":"USER_EXT_OK","title":"OK","message":"ran from user dir"}\'\n',
+        encoding="utf-8",
+    )
+
+    req_path = user_paths.runtime_dir / "req_test.json"
+    out_path = user_paths.runtime_dir / "res_test.json"
     req_path.write_text(
-        json.dumps({"action": "disable-direct", "force": False}),
+        json.dumps(
+            {
+                "action": "run-ext",
+                "ext_id": "user-only-ext",
+                "force": False,
+                "data_dir": str(user_paths.data_dir),
+            }
+        ),
         encoding="utf-8",
     )
 
@@ -227,4 +262,6 @@ def test_cli_worker_executes_request_and_writes_atomic_result(
     assert out_path.is_file()
     res = json.loads(out_path.read_text(encoding="utf-8"))
     assert res["ok"] is True
-    assert res["code"] == "DIRECT_DISABLED"
+    assert res["code"] == "USER_EXT_OK"
+    assert list(user_paths.logs_dir.glob("wiredeck_*.log"))
+

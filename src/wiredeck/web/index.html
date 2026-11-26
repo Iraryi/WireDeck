@@ -39,7 +39,7 @@
 
           <button class="nav-item" data-nav="wizard" type="button">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
-            <span data-i18n="nav_wizard">首次向导</span>
+            <span data-i18n="nav_wizard">连机教程</span>
             <span class="nav-badge-dot" id="wizDot"></span>
           </button>
           <button class="nav-item" data-nav="ai" type="button">
@@ -160,73 +160,49 @@
           <div class="group-box" id="wDiagTable"></div>
         </section>
 
-        <!-- VIEW 2: TRANSPORT & PRESET-TAILORED SETUP WIZARD -->
-        <section class="view" id="viewWizard">
+        <!-- VIEW 2: INTERACTIVE PC + CONSOLE STEP-BY-STEP GUIDE -->
+        <section class="view view-compact" id="viewWizard">
           <div class="page-head">
             <div>
-              <div class="page-title" data-i18n="wizard_title">首次准备向导</div>
-              <div class="page-sub" data-i18n="wizard_sub">已按当前模式与设备预设裁剪步骤，绿灯项可直接跳过</div>
+              <div class="page-title" id="guideTitle" data-i18n="wizard_title">连机教程</div>
+              <div class="page-sub" id="guideSub" data-i18n="wizard_sub">顺着步骤一个个点过去、照做即可连好</div>
             </div>
-            <button class="btn btn-sm" id="btnWizRefresh" type="button" data-i18n="btn_refresh">刷新</button>
+            <div class="guide-head-right">
+              <div class="seg-group" role="group" aria-label="Guide connection mode">
+                <button class="seg-btn active" id="btnGuideWired" type="button" data-i18n="guide_mode_wired">有线直连</button>
+                <button class="seg-btn" id="btnGuideHotspot" type="button" data-i18n="guide_mode_hotspot">5G 热点</button>
+                <button class="seg-btn" id="btnGuideLan" type="button" data-i18n="guide_mode_lan">同 Wi-Fi</button>
+              </div>
+              <button class="btn btn-sm" id="btnWizRefresh" type="button" data-i18n="btn_refresh">刷新</button>
+            </div>
           </div>
 
-          <div class="group-box">
-            <div class="list-row" id="wizStep1">
-              <div class="list-row-col">
-                <div class="row-head"><span id="wizS1Badge" class="sev-text idle">○ 待命</span><span id="wizS1Title">1. 有线网口体检</span></div>
-                <div class="row-desc" id="wizS1Desc" data-i18n="wiz_s1_desc">唤醒禁用的网卡 / PCIe 通道，关闭 EEE 节能防卡顿</div>
-              </div>
-              <div class="row-actions">
-                <button class="btn btn-sm" id="btnWizFixNic" type="button" data-i18n="wiz_s1_btn">唤醒并防抖</button>
-              </div>
-            </div>
+          <div class="guide-rail" id="guideRail"></div>
 
-            <div class="list-row" id="wizStep2">
-              <div class="list-row-col">
-                <div class="row-head"><span id="wizS2Badge" class="sev-text idle">○ 待命</span><span id="wizS2Title">2. 解除代理拦截</span></div>
-                <div class="row-desc" data-i18n="wiz_s2_desc">为微软商店与 Xbox 写入 UWP 回环豁免</div>
+          <div class="group-box guide-card" id="guideCard">
+            <div class="guide-card-head">
+              <div class="guide-head-left">
+                <span class="actor-pill actor-pc" id="guideActorPill">电脑端</span>
+                <span class="guide-step-title" id="guideStepTitle"></span>
               </div>
-              <div class="row-actions">
-                <button class="btn btn-sm" id="btnWizFixUwp" type="button" data-i18n="wiz_s2_btn">写入豁免</button>
-              </div>
+              <span class="sev-text idle" id="guideStepBadge">○ 待命</span>
             </div>
+            <div class="guide-goal" id="guideGoal"></div>
+            <div class="guide-live" id="guideLiveBox">
+              <div class="guide-live-text" id="guideLiveText"></div>
+              <div class="row-actions" id="guideActions"></div>
+            </div>
+            <div class="guide-checklist" id="guideChecklist" style="display:none;"></div>
+            <div class="guide-params" id="guideParams" style="display:none;"></div>
+          </div>
 
-            <div class="list-row" id="wizStep3">
-              <div class="list-row-col">
-                <div class="row-head"><span id="wizS3Badge" class="sev-text idle">○ 待命</span><span id="wizS3Title">3. 准备串流客户端</span></div>
-                <div class="row-desc" id="wizS3Desc" data-i18n="wiz_s3_desc">检测本机串流客户端或官方校验下载</div>
-              </div>
-              <div class="row-actions">
-                <button class="btn btn-sm" id="btnWizDownload" type="button" data-i18n="wiz_s3_btn">下载并校验</button>
-                <button class="btn btn-sm btn-primary" id="btnWizLaunch" type="button" data-i18n="wiz_s3_launch">启动</button>
-              </div>
+          <div class="guide-footer" id="guideFooter">
+            <button class="btn btn-sm" id="btnGuidePrev" type="button" data-i18n="guide_prev">上一步</button>
+            <div class="guide-foot-mid">
+              <span class="guide-counter" id="guideStepCounter">1 / 4</span>
+              <button class="btn btn-sm" id="btnGuideRecheck" type="button" data-i18n="guide_recheck">重新检测</button>
             </div>
-
-            <div id="wizStep4">
-              <div class="list-row" style="border-bottom:none;">
-                <div class="list-row-col">
-                  <div class="row-head"><span id="wizS4Badge" class="sev-text idle">○ 待命</span><span id="wizS4Title">4. 设备静态参数 & 连通验收</span></div>
-                  <div class="row-desc" id="wizS4Desc" data-i18n="wiz_peer_desc">在目标设备的有线网络设置中一次性填入以下 4 项</div>
-                </div>
-                <div class="row-actions">
-                  <button class="btn btn-sm" id="btnWizCopyNmcli" type="button" style="display:none" data-i18n="wiz_copy_nmcli">复制 Linux 命令</button>
-                  <button class="btn btn-sm" id="btnWizCopyIp" type="button" data-i18n="wiz_copy_params">复制参数</button>
-                  <button class="btn btn-sm btn-primary" id="btnWizTestPeer" type="button" data-i18n="wiz_test_peer">测试连通</button>
-                </div>
-              </div>
-              <div class="peer-ping-result" id="peerPingResult"></div>
-              <div class="ip-box" id="wizIpBox">
-                <div><div class="ip-k" data-i18n="ip_label_addr">IP 地址</div><div class="ip-v mono" id="cardPeerIp">192.168.50.1</div></div>
-                <div><div class="ip-k" data-i18n="ip_label_mask">子网掩码</div><div class="ip-v mono" id="cardMask">255.255.255.0</div></div>
-                <div><div class="ip-k" data-i18n="ip_label_gw">默认网关</div><div class="ip-v mono" id="cardHostIp">192.168.50.2</div></div>
-                <div><div class="ip-k" data-i18n="ip_label_dns">DNS</div><div class="ip-v mono" id="cardDns">223.5.5.5 / 8.8.8.8</div></div>
-              </div>
-              <div class="ip-box ip-box-2" id="wizWirelessBox" style="display:none;">
-                <div><div class="ip-k" data-i18n="w_ssid">热点</div><div class="ip-v mono" id="wizHotspotSsid">—</div></div>
-                <div><div class="ip-k" data-i18n="w_clients">设备</div><div class="ip-v mono" id="wizWirelessTarget">—</div></div>
-              </div>
-              <div class="note-line" id="wizTipLine" data-i18n="wiz_tip_xbox"></div>
-            </div>
+            <button class="btn btn-sm btn-primary" id="btnGuideNext" type="button" data-i18n="guide_next">下一步</button>
           </div>
         </section>
 
@@ -448,7 +424,8 @@
       </div>
 
       <div class="modal-actions">
-        <button class="btn btn-primary" id="btnOnbStart" type="button" data-i18n="onb_start">开始使用</button>
+        <button class="btn" id="btnOnbSkip" type="button" data-i18n="onb_skip">直接进主控台</button>
+        <button class="btn btn-primary" id="btnOnbStart" type="button" data-i18n="onb_start_guide">开始连机教程（首次推荐）</button>
       </div>
     </div>
   </div>

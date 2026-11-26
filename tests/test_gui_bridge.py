@@ -95,7 +95,8 @@ def test_wiredeck_api_state_settings_export_and_bridge_toggle(tmp_path: Path):
     assert api.save_settings({"wireless_peer_ip": "192.168.1.77"})["ok"] is True
 
     # Built-in preview wireless report
-    w_api = WireDeckApi(paths=paths, preview_state="wireless")
+    w_api = WireDeckApi(paths=paths, preview_state="wireless", preview_wizard_step=4)
+    assert w_api.get_state()["preview_wizard_step"] == 4
     w_rep = w_api.diagnose_wireless()
     assert w_rep["transport"] == "wireless"
     assert w_rep["mode"] == "hotspot"
@@ -164,3 +165,16 @@ def test_i18n_js_has_exact_key_parity_and_concise_home_copy():
     # Enforce concise home UI copy discipline
     for key in ("btn_enable_direct", "btn_disable_direct", "node_nic", "node_cable", "node_gate", "node_share", "node_console"):
         assert len(data["zh-CN"][key]) <= 12
+
+    # Interactive PC + Console guide keys present across all 4 languages
+    for required_guide_key in (
+        "onb_start_guide",
+        "onb_skip",
+        "guide_t_console",
+        "guide_c_xb_w_3",
+        "guide_c_ps_w_3",
+        "guide_c_sw_w_2",
+        "guide_c_hh_w_2",
+        "guide_daily_tip_wired",
+    ):
+        assert required_guide_key in base_keys

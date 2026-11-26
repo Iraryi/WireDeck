@@ -33,13 +33,16 @@
 | <img src="assets/screenshots/wireless_lan.png" alt="无线模式 - 同 Wi-Fi 防抖" width="100%" /> | <img src="assets/screenshots/onboarding.png" alt="开局引导弹窗" width="100%" /> |
 
 <details>
-<summary>展开查看断点拦截、PlayStation 专属向导、AI / DSH 协作接口与中性深灰主题截图</summary>
+<summary>展开查看交互式连机教程（Xbox / PS5）、断点拦截、AI / DSH 协作接口与深灰主题截图</summary>
 <p align="center">
-  <img src="assets/screenshots/home_breakpoint.png" alt="断点拦截视图" width="48%" />
-  <img src="assets/screenshots/wizard_ps.png" alt="PlayStation 专属向导" width="48%" />
+  <img src="assets/screenshots/wizard.png" alt="Xbox 交互式连机教程（电脑端 + 主机端）" width="48%" />
+  <img src="assets/screenshots/wizard_ps.png" alt="PlayStation 交互式连机教程（含 8 位 PIN 引导）" width="48%" />
 </p>
 <p align="center">
+  <img src="assets/screenshots/home_breakpoint.png" alt="断点拦截视图" width="48%" />
   <img src="assets/screenshots/ai_drawer.png" alt="AI / DSH 协作接口与内置工具库" width="48%" />
+</p>
+<p align="center">
   <img src="assets/screenshots/home_dark.png" alt="中性深灰主题" width="48%" />
 </p>
 </details>
@@ -48,8 +51,8 @@
 
 ## 3 步极简上手
 
-1. **选好模式与设备预设**：首次启动在弹窗中选择语言（简/繁/英/日）、连接方式（有线直连 / 无线模式）与目标设备，随时可在左侧导航一键切换。
-2. **按向导完成一次准备**：切换到 **首次向导**，程序按有线或无线及当前预设自动隐藏无关步骤（例如 PS5 自动跳过微软 UWP；热点模式免手填静态 IP）。
+1. **选好模式与设备预设**：首次启动在弹窗中选择语言（简/繁/英/日）、连接方式（有线直连 / 无线模式）与目标设备，点击 **开始连机教程（首次推荐）** 即可进入引导。
+2. **顺着「连机教程」一步步点过去**：界面按当前模式（有线直连 / 5G 热点 / 同 Wi-Fi）与设备预设自动编排 **电脑端一键操作 + 游戏机端编号勾选清单 + 实参复制/测速验收**（例如 PS5 含「启用远程游玩」及 8 位 PIN 配对引导；Xbox 含「启用远程功能」与借屏提示；热点模式附带 SSID/密码查看与设备自动发现）。
 3. **日常一键切换**：
    - **有线直连**：断开 VPN → 点 **开启游戏直连** → 启动串流端；玩完点 **恢复日常上网**（1 秒无痕恢复，零重启）。
    - **无线模式**：点 **开启 5GHz 热点** 让游戏机直接连笔记本，或点 **开启无线防抖** 消除同路由 Wi-Fi 的周期性卡顿尖刺；玩完点 **恢复日常无线** 原样还原。

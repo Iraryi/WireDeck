@@ -1051,6 +1051,256 @@ details.adv-box[open] > summary::after {
   margin: 0;
 }
 
+/* Interactive PC + Console Step-by-Step Setup Guide */
+.guide-head-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.guide-rail {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.guide-pill {
+  flex: 1;
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 9px;
+  border-radius: 5px;
+  border: 1px solid var(--border);
+  background: var(--surface-subtle);
+  color: var(--text-sec);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.guide-pill:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+.guide-pill.active {
+  background: var(--surface);
+  color: var(--text);
+  border-color: var(--accent);
+  font-weight: 600;
+}
+.guide-pill.done {
+  color: var(--text);
+}
+.guide-pill-num {
+  width: 17px;
+  height: 17px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 700;
+  flex-shrink: 0;
+  background: var(--divider);
+  color: var(--text-sec);
+}
+.guide-pill.done .guide-pill-num {
+  background: var(--accent);
+  color: #ffffff;
+}
+.guide-pill.active .guide-pill-num {
+  background: var(--accent);
+  color: #ffffff;
+}
+.guide-pill.fail .guide-pill-num {
+  background: var(--fail);
+  color: #ffffff;
+}
+.guide-pill.warn .guide-pill-num {
+  background: var(--warn);
+  color: #ffffff;
+}
+[data-theme="dark"] .guide-pill.warn .guide-pill-num,
+[data-theme="dark"] .guide-pill.fail .guide-pill-num {
+  color: #1a1a1a;
+}
+.guide-pill-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.guide-card {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.guide-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 7px 14px;
+  border-bottom: 1px solid var(--divider);
+  background: var(--surface-subtle);
+}
+.guide-head-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.guide-step-title {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.actor-pill {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 7px;
+  border-radius: 3px;
+  font-size: 11px;
+  font-weight: 600;
+  flex-shrink: 0;
+  border: 1px solid var(--tag-border);
+  background: var(--tag-bg);
+  color: var(--tag-fg);
+}
+.actor-pill.actor-console {
+  background: var(--infobar-warn-bg);
+  border-color: var(--infobar-warn-border);
+  color: var(--warn);
+}
+.actor-pill.actor-verify {
+  background: var(--surface-subtle);
+  border-color: var(--border-strong);
+  color: var(--ok);
+}
+
+.guide-goal {
+  padding: 6px 14px 2px;
+  font-size: 12px;
+  color: var(--text-sec);
+}
+.guide-live {
+  margin: 4px 14px 6px;
+  padding: 6px 10px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: var(--surface-subtle);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.guide-live.sev-ok { border-color: var(--accent); }
+.guide-live.sev-fail {
+  background: var(--infobar-fail-bg);
+  border-color: var(--infobar-fail-border);
+}
+.guide-live.sev-warn {
+  background: var(--infobar-warn-bg);
+  border-color: var(--infobar-warn-border);
+}
+.guide-live-text {
+  font-size: 12px;
+  color: var(--text);
+  min-width: 0;
+  line-height: 1.38;
+}
+
+.guide-checklist {
+  margin: 0 14px 6px;
+  border: 1px solid var(--divider);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.guide-check-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--divider);
+  cursor: pointer;
+  background: var(--surface);
+  font-size: 12px;
+  line-height: 1.35;
+  color: var(--text);
+}
+.guide-check-item:last-child { border-bottom: none; }
+.guide-check-item:hover { background: var(--surface-subtle); }
+.guide-check-item.checked {
+  background: var(--surface-subtle);
+  color: var(--text-sec);
+}
+.guide-check-item input[type="checkbox"] {
+  min-width: auto !important;
+  width: 14px;
+  height: 14px !important;
+  margin: 2px 0 0;
+  flex-shrink: 0;
+  accent-color: var(--accent);
+}
+.guide-check-num {
+  font-weight: 700;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+.guide-check-item.checked .guide-check-num { color: var(--ok); }
+
+.guide-params {
+  margin: 0 14px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.guide-params .ip-box {
+  margin: 0;
+  padding: 7px 10px;
+}
+.guide-param-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--code-bg);
+  flex-wrap: wrap;
+}
+.guide-tip {
+  font-size: 11.5px;
+  color: var(--text-sec);
+  line-height: 1.35;
+}
+
+.guide-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-shrink: 0;
+}
+.guide-foot-mid {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.guide-counter {
+  font-size: 12px;
+  color: var(--text-sec);
+  font-weight: 600;
+}
+
 /* Subtle Toast */
 .toast {
   position: fixed;

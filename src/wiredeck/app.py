@@ -277,12 +277,14 @@ class WireDeckApi:
         snapshot_fn: Callable[..., dict[str, Any]] = collect_system_snapshot,
         wireless_snapshot_fn: Callable[..., dict[str, Any]] = collect_wireless_snapshot,
         preview_state: str | None = None,
+        preview_wizard_step: int | None = None,
     ) -> None:
         self.paths = paths or resolve_app_paths()
         self.cfg = load_config(self.paths)
         self._snapshot_fn = snapshot_fn
         self._wireless_snapshot_fn = wireless_snapshot_fn
         self._preview_state = preview_state
+        self._preview_wizard_step = preview_wizard_step
         self._last_report: DiagnosticReport | None = None
         self._last_wireless_report: DiagnosticReport | None = None
         self._bridge: LocalBridgeServer | None = None
@@ -329,6 +331,7 @@ class WireDeckApi:
             "paths": self.paths.to_dict(),
             "bridge": bridge_info,
             "preview_view": self._preview_view_name(),
+            "preview_wizard_step": self._preview_wizard_step,
         }
 
     def diagnose(self) -> dict[str, Any]:
@@ -917,6 +920,12 @@ def main(argv: list[str] | None = None) -> int:
         default=2.0,
         help="Seconds to wait before capturing screenshot",
     )
+    parser.add_argument(
+        "--wizard-step",
+        type=int,
+        default=None,
+        help="Optional 1-based step index when previewing wizard view",
+    )
     args = parser.parse_args(argv)
 
     title = f"{APP_NAME} v{APP_VERSION}"
@@ -938,7 +947,7 @@ def main(argv: list[str] | None = None) -> int:
 
     import webview
 
-    api = WireDeckApi(preview_state=args.preview_state)
+    api = WireDeckApi(preview_state=args.preview_state, preview_wizard_step=args.wizard_step)
     if args.preview_state in ("wireless", "wireless_lan", "wireless_wizard"):
         api.cfg.active_transport = "wireless"
         api.cfg.wireless_submode = "lan" if args.preview_state == "wireless_lan" else "hotspot"

@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-label="WireDeck Logo">
+  <defs>
+    <linearGradient id="wd-bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0B1324"/>
+      <stop offset="100%" stop-color="#132238"/>
+    </linearGradient>
+    <linearGradient id="wd-accent" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#06D6A0"/>
+      <stop offset="100%" stop-color="#0EA5E9"/>
+    </linearGradient>
+    <linearGradient id="wd-glow" x1="0" y1="0.5" x2="1" y2="0.5">
+      <stop offset="0%" stop-color="#10B981"/>
+      <stop offset="50%" stop-color="#38BDF8"/>
+      <stop offset="100%" stop-color="#10B981"/>
+    </linearGradient>
+  </defs>
+  <!-- Squircle frame -->
+  <rect x="12" y="12" width="232" height="232" rx="54" fill="url(#wd-bg)" stroke="#1E3A5F" stroke-width="6"/>
+  <!-- Subtle grid accent arc -->
+  <path d="M56 178 C 96 206, 160 206, 200 178" fill="none" stroke="url(#wd-glow)" stroke-width="5" stroke-linecap="round" opacity="0.35"/>
+  <!-- Left node: Laptop silhouette -->
+  <rect x="38" y="88" width="52" height="38" rx="7" fill="none" stroke="#E2E8F0" stroke-width="7"/>
+  <path d="M30 138 H98" stroke="#E2E8F0" stroke-width="8" stroke-linecap="round"/>
+  <circle cx="64" cy="107" r="6" fill="#06D6A0"/>
+  <!-- Center: Gigabit wired link + lightning pulse -->
+  <line x1="94" y1="107" x2="115" y2="107" stroke="url(#wd-accent)" stroke-width="7" stroke-linecap="round"/>
+  <polygon points="134,68 112,114 128,114 120,152 148,102 131,102" fill="url(#wd-accent)"/>
+  <line x1="143" y1="107" x2="164" y2="107" stroke="url(#wd-accent)" stroke-width="7" stroke-linecap="round"/>
+  <!-- Right node: Console monolith + status LED -->
+  <rect x="168" y="72" width="48" height="72" rx="10" fill="none" stroke="#E2E8F0" stroke-width="7"/>
+  <circle cx="192" cy="94" r="7" fill="#38BDF8"/>
+  <line x1="181" y1="126" x2="203" y2="126" stroke="#94A3B8" stroke-width="6" stroke-linecap="round"/>
+</svg>

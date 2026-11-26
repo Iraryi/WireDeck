@@ -146,6 +146,28 @@ def test_parse_netsh_wlan_interfaces_and_autoconfig_en_and_zh():
     rtts = parse_ping_series("来自 192.168.137.42 的回复: 字节=32 时间=2ms TTL=64\n来自 192.168.137.42 的回复: 字节=32 时间<1ms TTL=64")
     assert rtts == [2.0, 0.5]
 
+    ja_out = """
+    名前                   : Wi-Fi
+    説明                   : Intel(R) Wi-Fi 6E AX211 160MHz
+    状態                   : 接続されました
+    SSID                   : Home_5G_JP
+    バンド                 : 5 GHz
+    チャネル               : 157
+    受信速度 (Mbps)        : 1201
+    送信速度 (Mbps)        : 1201
+    シグナル               : 90%
+    """
+    parsed_ja = parse_netsh_wlan_interfaces(ja_out)
+    assert parsed_ja["connected"] is True
+    assert parsed_ja["ssid"] == "Home_5G_JP"
+    assert parsed_ja["band_ghz"] == 5.0
+    assert parsed_ja["channel"] == 157
+    assert parsed_ja["rx_rate_mbps"] == 1201.0
+    assert parsed_ja["signal_pct"] == 90
+    assert parse_netsh_autoconfig('インターフェイス "Wi-Fi" で自動構成ロジックは有効です', "Wi-Fi") is True
+    assert parse_netsh_autoconfig('インターフェイス "Wi-Fi" で自動構成ロジックは無効です', "Wi-Fi") is False
+    assert parse_ping_series("192.168.137.42 からの応答: バイト数 =32 時間 =2ms TTL=64\n192.168.137.42 からの応答: バイト数 =32 時間 <1ms TTL=64") == [2.0, 0.5]
+
 
 def test_wireless_classifier_healthy_and_fault_rules():
     cfg = AppConfig(active_transport="wireless", wireless_submode="hotspot", active_preset="xbox")
@@ -200,17 +222,25 @@ def test_wireless_actions_guard_backup_and_restore(tmp_path: Path):
     res_block = enable_hotspot(paths, cfg, force=False, snapshot_fn=lambda *a, **kw: _base_wireless_snap(wired_nat_active=True))
     assert res_block.ok is False and res_block.code == "WIRED_NAT_CONFLICT" and res_block.exit_code == 2
 
-    # 2. enable-hotspot succeeds when forced (invoking disable_direct_fn)
+    # 2. enable-hotspot succeeds when forced and includes pre-configure stop guard when upgrading from 2.4GHz
     called: list[str] = []
+    hs_scripts: list[str] = []
+
+    def _hs_runner(sc: str, t: int) -> PsResult:
+        hs_scripts.append(sc)
+        return _ok_ps('{"state":"On","band":"FiveGigahertz"}')
+
     res_force = enable_hotspot(
         paths,
         cfg,
         force=True,
-        runner=lambda sc, t: _ok_ps('{"state":"On","band":"FiveGigahertz"}'),
+        runner=_hs_runner,
         snapshot_fn=lambda *a, **kw: _base_wireless_snap(wired_nat_active=True),
         disable_direct_fn=lambda: called.append("disabled") or res_block.__class__(ok=True, code="OK", message="OK"),
     )
     assert res_force.ok is True and called == ["disabled"]
+    assert "$wasOn" in hs_scripts[-1] and "$origBand" in hs_scripts[-1]
+    assert hs_scripts[-1].index("StopTetheringAsync") < hs_scripts[-1].index("ConfigureAccessPointAsync")
 
     # 3. optimize-wifi NEVER pauses autoconfig when disconnected!
     scripts_seen: list[str] = []
@@ -229,20 +259,25 @@ def test_wireless_actions_guard_backup_and_restore(tmp_path: Path):
     assert "autoconfig enabled=no" not in scripts_seen[-1]
     assert (paths.runtime_dir / "wifi_backup.json").is_file()
 
-    # 4. Connected optimize DOES pause autoconfig, and restore-wifi restores properties + removes backup
+    # 4. Connected optimize DOES pause autoconfig + resolves ValidDisplayValues (Intel MIMOPowerSaveMode fallback='3'),
+    # and restore-wifi restores properties + removes backup
     (paths.runtime_dir / "wifi_backup.json").unlink()
     snap_conn = _base_wireless_snap(wlan={"connected": True}, autoconfig_enabled=True)
     snap_conn["wifi_adapters"][0]["advanced_properties"] = [
-        {"keyword": "MIMOPowerSaveMode", "display_value": "自动 SMPS", "registry_value": "1"}
+        {"keyword": "MIMOPowerSaveMode", "display_value": "Auto SMPS", "registry_value": "0"},
+        {"keyword": "*PacketCoalescing", "display_value": "Enabled", "registry_value": "1"},
     ]
     res_conn = optimize_wifi(paths, cfg, runner=_capture_runner, snapshot_fn=lambda *a, **kw: snap_conn)
     assert res_conn.ok is True
     assert res_conn.details["paused_scan"] is True
     assert "autoconfig enabled=no" in scripts_seen[-1]
+    assert "ValidDisplayValues" in scripts_seen[-1]
+    assert "MIMOPowerSaveMode" in scripts_seen[-1] and "'3'" in scripts_seen[-1]
 
     res_rest = restore_wifi(paths, cfg, runner=_capture_runner, snapshot_fn=lambda *a, **kw: snap_conn)
     assert res_rest.ok is True
     assert "autoconfig enabled=yes" in scripts_seen[-1]
+    assert "RegistryValue '0'" in scripts_seen[-1]
     assert not (paths.runtime_dir / "wifi_backup.json").exists()
 
     # 5. disable-hotspot & action dispatch

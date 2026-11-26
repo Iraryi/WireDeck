@@ -147,23 +147,20 @@ if (-not $prof) {{ throw "NO_CONNECTION_PROFILE" }}
 
 $tm = [Windows.Networking.NetworkOperators.NetworkOperatorTetheringManager]::CreateFromConnectionProfile($prof)
 $ap = $tm.GetCurrentAccessPointConfiguration()
+$wasOn = ([string]$tm.TetheringOperationalState -eq 'On')
+$origBand = [string]$ap.Band
 if ('{prefer_5g}' -eq '1') {{
   try {{
     $band5 = [Windows.Networking.NetworkOperators.TetheringWiFiBand]::FiveGigahertz
-    if ($ap.IsBandSupported($band5)) {{
+    if ($ap.IsBandSupported($band5) -and $origBand -ne 'FiveGigahertz') {{
+      if ($wasOn) {{
+        $null = Await-WinRTOp ($tm.StopTetheringAsync()) ([Windows.Networking.NetworkOperators.NetworkOperatorTetheringOperationResult])
+        $ap = $tm.GetCurrentAccessPointConfiguration()
+      }}
       $ap.Band = $band5
       Await-WinRTAction ($tm.ConfigureAccessPointAsync($ap))
     }}
   }} catch {{}}
-}}
-if ([string]$tm.TetheringOperationalState -eq 'On' -and '{prefer_5g}' -eq '1') {{
-  # Re-cycle if currently running on 2.4GHz so new band takes effect
-  $curAp = $tm.GetCurrentAccessPointConfiguration()
-  if ([string]$curAp.Band -ne 'FiveGigahertz' -and $curAp.IsBandSupported([Windows.Networking.NetworkOperators.TetheringWiFiBand]::FiveGigahertz)) {{
-    $null = Await-WinRTOp ($tm.StopTetheringAsync()) ([Windows.Networking.NetworkOperators.NetworkOperatorTetheringOperationResult])
-    $curAp.Band = [Windows.Networking.NetworkOperators.TetheringWiFiBand]::FiveGigahertz
-    Await-WinRTAction ($tm.ConfigureAccessPointAsync($curAp))
-  }}
 }}
 if ([string]$tm.TetheringOperationalState -ne 'On') {{
   $opRes = Await-WinRTOp ($tm.StartTetheringAsync()) ([Windows.Networking.NetworkOperators.NetworkOperatorTetheringOperationResult])
@@ -291,17 +288,33 @@ def optimize_wifi(
         },
     )
 
-    cmds: list[str] = [f"$wifi = {_ps_quote(wifi_name)}"]
+    cmds: list[str] = [
+        f"$wifi = {_ps_quote(wifi_name)}",
+        r"""function Set-WifiOptProp([string]$ifName, [string]$kw, [string]$optRe, [string]$fallbackRaw) {
+  try {
+    $prop = Get-NetAdapterAdvancedProperty -Name $ifName -RegistryKeyword $kw -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $prop) { return }
+    $pick = $null
+    foreach ($v in @($prop.ValidDisplayValues)) {
+      if ([string]$v -match $optRe) { $pick = [string]$v; break }
+    }
+    if ($pick) {
+      Set-NetAdapterAdvancedProperty -Name $ifName -RegistryKeyword $kw -DisplayValue $pick -NoRestart -ErrorAction SilentlyContinue
+    } else {
+      Set-NetAdapterAdvancedProperty -Name $ifName -RegistryKeyword $kw -RegistryValue $fallbackRaw -NoRestart -ErrorAction SilentlyContinue
+    }
+  } catch {}
+}""",
+    ]
     applied_changes: list[str] = []
 
     for kw, spec in WIFI_POWERSAVE_TARGETS.items():
         if kw not in present_map:
             continue
-        fallback = spec["fallback_raw"]
-        cmds.append(
-            f"try {{ Set-NetAdapterAdvancedProperty -Name $wifi -RegistryKeyword {_ps_quote(kw)} -RegistryValue {_ps_quote(fallback)} -NoRestart -ErrorAction SilentlyContinue }} catch {{}}"
-        )
-        applied_changes.append(f"{kw}={fallback}")
+        opt_re = str(spec["optimal_ps_regex"])
+        fallback = str(spec["fallback_raw"])
+        cmds.append(f"Set-WifiOptProp $wifi {_ps_quote(kw)} {_ps_quote(opt_re)} {_ps_quote(fallback)}")
+        applied_changes.append(f"{kw}->{fallback}")
 
     if "RoamAggressiveness" in present_map:
         cmds.append(
@@ -364,7 +377,7 @@ def restore_wifi(
     ]
     if backup and isinstance(backup.get("properties"), dict):
         for kw, val in backup["properties"].items():
-            if val:
+            if str(val) != "":
                 cmds.append(
                     f"try {{ Set-NetAdapterAdvancedProperty -Name $wifi -RegistryKeyword {_ps_quote(str(kw))} -RegistryValue {_ps_quote(str(val))} -NoRestart -ErrorAction SilentlyContinue }} catch {{}}"
                 )

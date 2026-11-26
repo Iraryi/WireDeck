@@ -175,6 +175,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p_status = sub.add_parser("status", help="Show compact mode and WireDeckNat state")
     p_status.add_argument("--json", action="store_true", dest="as_json")
     p_status.add_argument("--check-nat-active", action="store_true", help="Exit 0 if WireDeckNat active, 1 otherwise")
+    p_status.add_argument("--check-wifi-tuned", action="store_true", help="Exit 0 if wireless anti-stutter backup is active, 1 otherwise")
 
     p_apply = sub.add_parser("apply", help="Execute a system action")
     p_apply.add_argument("action", choices=list(SUPPORTED_ACTIONS))
@@ -185,6 +186,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     p_exp = sub.add_parser("export-bundle", help="Export sanitized diagnostic bundle for DSH/AI")
     p_exp.add_argument("--out", dest="export_out", default=None)
+    p_exp.add_argument("--transport", choices=["wired", "wireless"], default=None)
     p_exp.add_argument("--json", action="store_true", dest="as_json")
 
     p_ext = sub.add_parser("ext", help="Manage DSH/AI hot-reload extensions")
@@ -265,6 +267,9 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "status":
+        wifi_tuned = (paths.runtime_dir / "wifi_backup.json").is_file()
+        if args.check_wifi_tuned and not args.as_json:
+            return 0 if wifi_tuned else 1
         snap = collect_system_snapshot(cfg, probe_network=False)
         report = classify_snapshot(snap, cfg)
         nat_active = any(str(n.get("name", "")) == NAT_NAME for n in (snap.get("net_nats") or []))
@@ -274,14 +279,19 @@ def main(argv: list[str] | None = None) -> int:
             "mode": report.mode,
             "can_enable_direct": report.can_enable_direct,
             "nat_active": nat_active,
+            "wifi_tuned": wifi_tuned,
             "headline": report.headline,
             "primary_fault": report.primary_fault.to_dict() if report.primary_fault else None,
         }
+        if args.check_wifi_tuned:
+            if args.as_json:
+                _emit(payload, True)
+            return 0 if wifi_tuned else 1
         if args.check_nat_active:
             if args.as_json:
                 _emit(payload, True)
             return 0 if nat_active else 1
-        _emit(payload, args.as_json, f"{report.mode} | nat_active={nat_active} | {report.headline}")
+        _emit(payload, args.as_json, f"{report.mode} | nat_active={nat_active} | wifi_tuned={wifi_tuned} | {report.headline}")
         return 0
 
     if args.command == "apply":
@@ -297,13 +307,26 @@ def main(argv: list[str] | None = None) -> int:
         return res.exit_code
 
     if args.command == "export-bundle":
-        report = run_diagnosis(
-            paths,
-            cfg,
-            include_extensions=True,
-            probe_network=True,
-            snapshot_fn=collect_system_snapshot,
-        )
+        transport = args.transport or cfg.active_transport
+        if transport == "wireless":
+            from wiredeck.wireless_diagnostics import run_wireless_diagnosis
+            from wiredeck.wireless_probes import collect_wireless_snapshot
+
+            report = run_wireless_diagnosis(
+                paths,
+                cfg,
+                include_extensions=True,
+                probe_network=True,
+                snapshot_fn=collect_wireless_snapshot,
+            )
+        else:
+            report = run_diagnosis(
+                paths,
+                cfg,
+                include_extensions=True,
+                probe_network=True,
+                snapshot_fn=collect_system_snapshot,
+            )
         out_p = Path(args.export_out) if args.export_out else None
         bundle_path, prompt = export_diagnostic_bundle(paths, report, cfg, out_path=out_p)
         payload = {

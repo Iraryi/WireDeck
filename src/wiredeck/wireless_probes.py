@@ -30,30 +30,34 @@ from wiredeck.version import NAT_NAME
 WIFI_POWERSAVE_TARGETS: dict[str, dict[str, Any]] = {
     "MIMOPowerSaveMode": {
         "display": "MIMO Power Save Mode",
-        "bad_pattern": re.compile(r"(auto|smps|static|dynamic|自动|自動|静|動)", re.IGNORECASE),
-        "bad_exclude": re.compile(r"(no\s*smps|无\s*smps|無\s*smps|disabled|关闭|停用)", re.IGNORECASE),
-        "optimal_match": re.compile(r"(no\s*smps|无\s*smps|無\s*smps)", re.IGNORECASE),
-        "fallback_raw": "0",
+        "bad_pattern": re.compile(r"(auto|smps|static|dynamic|自动|自動|静|動|有効)", re.IGNORECASE),
+        "bad_exclude": re.compile(r"(no\s*smps|无\s*smps|無\s*smps|smps\s*なし|disabled|关闭|停用|無効)", re.IGNORECASE),
+        "optimal_match": re.compile(r"(no\s*smps|无\s*smps|無\s*smps|smps\s*なし|disabled|已禁用|已停用|無効)", re.IGNORECASE),
+        "optimal_ps_regex": r"(?i)(no\s*smps|无\s*smps|無\s*smps|smps\s*なし|disabled|已禁用|已停用|無効)",
+        "fallback_raw": "3",
     },
     "*PacketCoalescing": {
         "display": "Packet Coalescing",
-        "bad_pattern": re.compile(r"(enabled|1|已启用|已啟用)", re.IGNORECASE),
-        "bad_exclude": re.compile(r"(disabled|0|已禁用|已停用|关闭)", re.IGNORECASE),
-        "optimal_match": re.compile(r"(disabled|已禁用|已停用)", re.IGNORECASE),
+        "bad_pattern": re.compile(r"(enabled|1|已启用|已啟用|有効)", re.IGNORECASE),
+        "bad_exclude": re.compile(r"(disabled|0|已禁用|已停用|关闭|關閉|無効)", re.IGNORECASE),
+        "optimal_match": re.compile(r"(disabled|已禁用|已停用|关闭|關閉|無効)", re.IGNORECASE),
+        "optimal_ps_regex": r"(?i)(disabled|已禁用|已停用|無効|关闭|關閉)",
         "fallback_raw": "0",
     },
     "PowerSavingMode": {
         "display": "Power Saving Mode",
-        "bad_pattern": re.compile(r"(enabled|maximum|1|2|已启用|已啟用)", re.IGNORECASE),
-        "bad_exclude": re.compile(r"(disabled|off|0|已禁用|已停用|关闭)", re.IGNORECASE),
-        "optimal_match": re.compile(r"(disabled|已禁用|已停用)", re.IGNORECASE),
+        "bad_pattern": re.compile(r"(enabled|maximum|1|2|已启用|已啟用|有効)", re.IGNORECASE),
+        "bad_exclude": re.compile(r"(disabled|off|0|已禁用|已停用|关闭|關閉|無効)", re.IGNORECASE),
+        "optimal_match": re.compile(r"(disabled|off|已禁用|已停用|关闭|關閉|無効)", re.IGNORECASE),
+        "optimal_ps_regex": r"(?i)(disabled|off|已禁用|已停用|無効|关闭|關閉)",
         "fallback_raw": "0",
     },
     "uAPSDSupport": {
         "display": "U-APSD Support",
-        "bad_pattern": re.compile(r"(enabled|1|已启用|已啟用)", re.IGNORECASE),
-        "bad_exclude": re.compile(r"(disabled|0|已禁用|已停用)", re.IGNORECASE),
-        "optimal_match": re.compile(r"(disabled|已禁用|已停用)", re.IGNORECASE),
+        "bad_pattern": re.compile(r"(enabled|1|已启用|已啟用|有効)", re.IGNORECASE),
+        "bad_exclude": re.compile(r"(disabled|0|已禁用|已停用|关闭|關閉|無効)", re.IGNORECASE),
+        "optimal_match": re.compile(r"(disabled|已禁用|已停用|关闭|關閉|無効)", re.IGNORECASE),
+        "optimal_ps_regex": r"(?i)(disabled|已禁用|已停用|無効|关闭|關閉)",
         "fallback_raw": "0",
     },
 }
@@ -115,6 +119,7 @@ foreach ($a in $adapters) {
           display_name = [string]$p.DisplayName
           display_value = [string]$p.DisplayValue
           registry_value = ($p.RegistryValue -join ',')
+          valid_display_values = @($p.ValidDisplayValues | ForEach-Object { [string]$_ })
         }
       }
     } catch {}
@@ -259,16 +264,16 @@ def parse_netsh_wlan_interfaces(text: str) -> dict[str, Any]:
         return out
 
     key_map: list[tuple[re.Pattern[str], str]] = [
-        (re.compile(r"^(?:Name|名称|名稱)$", re.IGNORECASE), "name"),
-        (re.compile(r"^(?:Description|描述)$", re.IGNORECASE), "description"),
-        (re.compile(r"^(?:State|状态|狀態)$", re.IGNORECASE), "state_raw"),
+        (re.compile(r"^(?:Name|名称|名稱|名前)$", re.IGNORECASE), "name"),
+        (re.compile(r"^(?:Description|描述|説明)$", re.IGNORECASE), "description"),
+        (re.compile(r"^(?:State|状态|狀態|状態)$", re.IGNORECASE), "state_raw"),
         (re.compile(r"^SSID$", re.IGNORECASE), "ssid"),
-        (re.compile(r"^(?:Band|波段|頻帶)$", re.IGNORECASE), "band"),
-        (re.compile(r"^(?:Channel|频道|頻道)$", re.IGNORECASE), "channel"),
-        (re.compile(r"^(?:Radio type|无线电类型|無線電類型)$", re.IGNORECASE), "radio_type"),
-        (re.compile(r"^(?:Receive rate\s*\(Mbps\)|接收速率\s*\(Mbps\))$", re.IGNORECASE), "rx"),
-        (re.compile(r"^(?:Transmit rate\s*\(Mbps\)|传输速率\s*\(Mbps\)|傳送速率\s*\(Mbps\))$", re.IGNORECASE), "tx"),
-        (re.compile(r"^(?:Signal|信号|訊號)$", re.IGNORECASE), "signal"),
+        (re.compile(r"^(?:Band|波段|頻帶|バンド)$", re.IGNORECASE), "band"),
+        (re.compile(r"^(?:Channel|频道|頻道|チャネル)$", re.IGNORECASE), "channel"),
+        (re.compile(r"^(?:Radio type|无线电类型|無線電類型|無線の種類)$", re.IGNORECASE), "radio_type"),
+        (re.compile(r"^(?:Receive rate\s*\(Mbps\)|接收速率\s*\(Mbps\)|受信速度\s*\(Mbps\))$", re.IGNORECASE), "rx"),
+        (re.compile(r"^(?:Transmit rate\s*\(Mbps\)|传输速率\s*\(Mbps\)|傳送速率\s*\(Mbps\)|送信速度\s*\(Mbps\))$", re.IGNORECASE), "tx"),
+        (re.compile(r"^(?:Signal|信号|訊號|シグナル)$", re.IGNORECASE), "signal"),
         (re.compile(r"^Rssi$", re.IGNORECASE), "rssi"),
     ]
 
@@ -291,7 +296,12 @@ def parse_netsh_wlan_interfaces(text: str) -> dict[str, Any]:
             out["description"] = v
         elif field == "state_raw":
             low = v.lower()
-            is_conn = ("connected" in low and "disconnected" not in low) or ("已连接" in v) or ("已連線" in v)
+            is_conn = (
+                ("connected" in low and "disconnected" not in low)
+                or ("已连接" in v)
+                or ("已連線" in v)
+                or (("接続されました" in v or "接続済み" in v) and "切断" not in v)
+            )
             out["connected"] = is_conn
             out["state"] = "connected" if is_conn else "disconnected"
         elif field == "ssid" and not out["ssid"]:
@@ -346,9 +356,9 @@ def parse_netsh_autoconfig(text: str, iface_name: str = "") -> bool | None:
         if iface_name and iface_name.lower() not in line.lower():
             continue
         low = line.lower()
-        if "disabled" in low or "已禁用" in line or "已停用" in line:
+        if "disabled" in low or "已禁用" in line or "已停用" in line or "無効" in line:
             return False
-        if "enabled" in low or "已启用" in line or "已啟用" in line:
+        if "enabled" in low or "已启用" in line or "已啟用" in line or "有効" in line:
             return True
     # Fallback scan across any line if interface name wasn't matched
     if iface_name:

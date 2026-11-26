@@ -27,6 +27,8 @@
     confirmCallback: null,
     pollTimer: null,
     busy: false,
+    wiredStale: true,
+    wirelessStale: true,
     onbSelectedLang: "zh-CN",
     onbSelectedTransport: "wired",
     onbSelectedPreset: "xbox",
@@ -116,6 +118,10 @@
         }
         const rep = nextT === "wireless" ? state.wirelessReport : state.report;
         if (rep) updateWizardState(layerMapOf(rep), rep);
+        if ((nextT === "wireless" && (!state.wirelessReport || state.wirelessStale))
+          || (nextT === "wired" && (!state.report || state.wiredStale))) {
+          await refreshAll(true);
+        }
       }
     }
   }
@@ -878,6 +884,8 @@
         return;
       }
       showToast(res.message || (res.ok ? "OK" : res.code));
+      state.wiredStale = true;
+      state.wirelessStale = true;
       await refreshAll(true);
     } catch (err) {
       showToast(String(err));
@@ -1111,17 +1119,27 @@
       syncConfigDisplay(st.config);
       renderBridgeState(st.bridge);
 
+      const activeT = st.preview_view === "wireless"
+        ? "wireless"
+        : (st.preview_view === "home" ? "wired" : state.transport);
+      const wantHotspotCreds = activeT === "wireless" && (state.wirelessSubmode === "hotspot" || !state.hotspotCreds);
       const tasks = [
-        api.diagnose(),
-        api.diagnose_wireless ? api.diagnose_wireless() : Promise.resolve(null),
-        api.get_hotspot_credentials ? api.get_hotspot_credentials() : Promise.resolve(null),
+        activeT === "wired" ? api.diagnose() : Promise.resolve(null),
+        activeT === "wireless" && api.diagnose_wireless ? api.diagnose_wireless() : Promise.resolve(null),
+        wantHotspotCreds && api.get_hotspot_credentials ? api.get_hotspot_credentials() : Promise.resolve(null),
         api.list_extensions(),
         api.list_toolkits ? api.list_toolkits() : Promise.resolve([]),
       ];
       const [rep, wRep, creds, exts, tools] = await Promise.all(tasks);
       if (creds && creds.ok) state.hotspotCreds = creds;
-      if (rep) renderReport(rep);
-      if (wRep) renderWirelessReport(wRep);
+      if (rep) {
+        state.wiredStale = false;
+        renderReport(rep);
+      }
+      if (wRep) {
+        state.wirelessStale = false;
+        renderWirelessReport(wRep);
+      }
       renderExtensions(exts);
       renderToolkits(tools);
 
@@ -1400,6 +1418,8 @@
       state.onboardingDismissed = true;
       document.getElementById("onboardingModal").classList.remove("open");
       if (api && api.complete_onboarding) {
+        state.wiredStale = true;
+        state.wirelessStale = true;
         await api.complete_onboarding(state.onbSelectedLang, state.onbSelectedPreset, state.onbSelectedTransport);
         await refreshAll(true);
         await switchView(state.onbSelectedTransport === "wireless" ? "wireless" : "home", true);
@@ -1426,6 +1446,8 @@
     document.getElementById("setProfile").addEventListener("change", async (e) => {
       const api = getApi();
       if (!api || !api.switch_preset) return;
+      state.wiredStale = true;
+      state.wirelessStale = true;
       const res = await api.switch_preset(e.target.value);
       if (res && res.ok) await refreshAll(true);
     });
@@ -1464,6 +1486,8 @@
         return;
       }
       showToast(t("toast_saved"));
+      state.wiredStale = true;
+      state.wirelessStale = true;
       await refreshAll(true);
     });
 

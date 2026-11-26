@@ -69,6 +69,10 @@ zh_CN.ActiveNatPrompt=检测到 WireDeck 有线共享（WireDeckNat）当前仍�
 english.ActiveNatPrompt=WireDeck direct sharing (WireDeckNat) is still active. Clean it up with administrator permission before uninstalling? Choosing No cancels uninstall so your network is not left dirty.
 zh_CN.ActiveNatAbort=未能清理活跃的 WireDeckNat 共享（可能取消了 UAC 授权）。已中止卸载，请先在 WireDeck 中点击“恢复日常上网”后再卸载。
 english.ActiveNatAbort=Could not clean up active WireDeckNat (UAC may have been cancelled). Uninstall was cancelled; please click "Restore Normal Net" in WireDeck first.
+zh_CN.ActiveWifiPrompt=检测到 WireDeck 无线防抖调优（及后台扫描暂停）当前仍处于生效状态。是否先通过管理员权限恢复日常无线配置，再继续卸载？选择“否”将中止卸载以免 Wi-Fi 自动扫描保持停用。
+english.ActiveWifiPrompt=WireDeck Wi-Fi anti-stutter tuning (including paused AutoConfig scan) is still active. Restore default Wi-Fi settings with administrator permission before uninstalling? Choosing No cancels uninstall so your Wi-Fi scan stays healthy.
+zh_CN.ActiveWifiAbort=未能恢复日常无线配置（可能取消了 UAC 授权）。已中止卸载，请先在 WireDeck 无线模式中点击“恢复日常无线”后再卸载。
+english.ActiveWifiAbort=Could not restore Wi-Fi settings (UAC may have been cancelled). Uninstall was cancelled; please click "Restore Normal Wi-Fi" in WireDeck first.
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:TaskDesktop}"
@@ -193,6 +197,43 @@ begin
           if (not Exec(CliExe, 'apply disable-direct --elevate', '', SW_HIDE, ewWaitUntilTerminated, ResultCode)) or (ResultCode <> 0) then
           begin
             MsgBox(CustomMessage('ActiveNatAbort'), mbError, MB_OK);
+            Result := False;
+            Exit;
+          end;
+        end
+        else
+        begin
+          Result := False;
+          Exit;
+        end;
+      end;
+    end;
+  end;
+
+  { Check if wireless anti-stutter backup is active (exit code 0 means active) }
+  if Exec(CliExe, 'status --check-wifi-tuned', '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
+  begin
+    if ResultCode = 0 then
+    begin
+      if UninstallSilent then
+      begin
+        if FileExists(ExpandConstant('{app}\portable.mode')) then
+          LogDir := ExpandConstant('{app}\data\logs')
+        else
+          LogDir := ExpandConstant('{localappdata}\WireDeck\logs');
+        ForceDirectories(LogDir);
+        LogFile := LogDir + '\uninstall_warning.log';
+        SaveStringToFile(LogFile,
+          'WARNING: WireDeck Wi-Fi anti-stutter tuning was still active during silent uninstall. Run "netsh wlan set autoconfig enabled=yes interface=WLAN" as Administrator.' + #13#10,
+          True);
+      end
+      else
+      begin
+        if MsgBox(CustomMessage('ActiveWifiPrompt'), mbConfirmation, MB_YESNO) = IDYES then
+        begin
+          if (not Exec(CliExe, 'apply restore-wifi --elevate', '', SW_HIDE, ewWaitUntilTerminated, ResultCode)) or (ResultCode <> 0) then
+          begin
+            MsgBox(CustomMessage('ActiveWifiAbort'), mbError, MB_OK);
             Result := False;
             Exit;
           end;

@@ -206,6 +206,40 @@ def test_cli_ext_list_validate_and_export_bundle(
     assert exp["ok"] is True
     assert Path(exp["bundle_path"]).is_file()
 
+    # check-wifi-tuned fast-path + export-bundle --transport wireless
+    assert cli.main(["status", "--check-wifi-tuned"]) == 1
+    paths.runtime_dir.mkdir(parents=True, exist_ok=True)
+    (paths.runtime_dir / "wifi_backup.json").write_text('{"interface_alias":"WLAN"}\n', encoding="utf-8")
+    assert cli.main(["status", "--check-wifi-tuned"]) == 0
+
+    from wiredeck import wireless_probes
+
+    monkeypatch.setattr(
+        wireless_probes,
+        "collect_wireless_snapshot",
+        lambda *a, **kw: {
+            "is_admin": False,
+            "wifi_adapters": [{"name": "WLAN", "status": "Up", "powersave_enabled": []}],
+            "wlan": {"connected": True, "band": "5 GHz", "band_ghz": 5.0, "channel": 149, "rssi_dbm": -50, "signal_pct": 88},
+            "autoconfig_enabled": False,
+            "ipv4_addresses": [{"interface_alias": "WLAN", "ip": "192.168.1.50", "prefix_length": 24}],
+            "wifi_gateway_ip": "192.168.1.1",
+            "default_routes": [],
+            "wired_nat_active": False,
+            "hotspot": {"state": "On", "band": "FiveGigahertz", "ssid": "WireDeck-5G"},
+            "hotspot_clients": [],
+            "uwp_exempt_packages": [],
+            "uwp_missing_packages": [],
+            "stream_clients": {},
+            "connectivity": {"host_internet_ok": True},
+        },
+    )
+    w_bundle = tmp_path / "wireless_bundle.json"
+    assert cli.main(["export-bundle", "--transport", "wireless", "--out", str(w_bundle), "--json"]) == 0
+    w_exp = json.loads(capsys.readouterr().out)
+    assert "--transport wireless" in w_exp["prompt"]
+    assert json.loads(w_bundle.read_text(encoding="utf-8"))["report"]["transport"] == "wireless"
+
 
 def test_cli_worker_executes_request_and_preserves_invoking_user_data_dir(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch

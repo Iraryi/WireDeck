@@ -1,0 +1,50 @@
+﻿; Simplified Chinese overlay for Inno Setup 6 (layered on top of compiler:Default.isl)
+[LangOptions]
+LanguageName=简体中文
+LanguageID=$0804
+LanguageCodePage=936
+DialogFontName=Microsoft YaHei UI
+DialogFontSize=9
+WelcomeFontName=Microsoft YaHei UI
+WelcomeFontSize=12
+TitleFontName=Microsoft YaHei UI
+TitleFontSize=24
+CopyrightFontName=Microsoft YaHei UI
+CopyrightFontSize=9
+
+[Messages]
+SetupAppTitle=安装
+SetupWindowTitle=安装 - %1
+UninstallAppTitle=卸载
+UninstallAppFullTitle=卸载 %1
+ButtonBack=< 上一步(&B)
+ButtonNext=下一步(&N) >
+ButtonInstall=安装(&I)
+ButtonOK=确定
+ButtonCancel=取消
+ButtonYes=是(&Y)
+ButtonNo=否(&N)
+ButtonFinish=完成(&F)
+ButtonBrowse=浏览(&R)...
+WelcomeLabel1=欢迎使用 [name] 安装向导
+WelcomeLabel2=即将在您的电脑上安装 [name/ver]。%n%n安装为当前用户目录，默认无需管理员权限。
+WizardSelectDir=选择安装位置
+SelectDirDesc=您想将 [name] 安装到哪里？
+SelectDirLabel3=安装程序将把 [name] 安装到以下文件夹。
+SelectDirBrowseLabel=要继续请点击“下一步”；如需更换文件夹请点击“浏览”。
+WizardSelectTasks=选择附加任务
+SelectTasksDesc=您希望执行哪些附加任务？
+SelectTasksLabel2=选择安装 [name] 时希望执行的附加任务，然后点击“下一步”。
+WizardReady=准备安装
+ReadyLabel1=安装程序现已准备好在您的电脑上安装 [name]。
+ReadyLabel2a=点击“安装”继续，或点击“上一步”调整设置。
+WizardInstalling=正在安装
+InstallingLabel=正在安装 [name]，请稍候...
+FinishedHeadingLabel=[name] 安装完成
+FinishedLabelNoIcons=安装程序已完成 [name] 的安装。
+FinishedLabel=安装程序已完成 [name] 的安装。您可以立即启动或从快捷方式打开。
+ClickFinish=点击“完成”退出安装向导。
+RunEntryShellExec=运行 %1
+ConfirmUninstall=确定要完全卸载 %1 及其所有程序组件吗？（用户配置与 AI 扩展将被保留）
+UninstalledAll=已成功从您的电脑卸载 %1。
+UninstalledMost=已完成 %1 卸载，用户自建文件或数据目录已为您安全保留。

@@ -29,6 +29,10 @@ SUPPORTED_ACTIONS = (
     "fix-uwp",
     "clear-ics",
     "clear-netnat",
+    "enable-hotspot",
+    "disable-hotspot",
+    "optimize-wifi",
+    "restore-wifi",
     "run-ext",
 )
 
@@ -797,6 +801,35 @@ def execute_action(
         return _clear_ics(paths, cfg, runner, snapshot_fn)
     if action == "clear-netnat":
         return _clear_netnat(paths, cfg, force, runner, snapshot_fn)
+    if action == "enable-hotspot":
+        from wiredeck.wireless_actions import enable_hotspot
+        from wiredeck.wireless_probes import collect_wireless_snapshot
+
+        w_snap = snapshot_fn if snapshot_fn is not collect_system_snapshot else collect_wireless_snapshot
+        return enable_hotspot(
+            paths,
+            cfg,
+            force=force,
+            runner=runner,
+            snapshot_fn=w_snap,
+            disable_direct_fn=lambda: _disable_direct(paths, cfg, runner, collect_system_snapshot),
+        )
+    if action == "disable-hotspot":
+        from wiredeck.wireless_actions import disable_hotspot
+
+        return disable_hotspot(paths, cfg, runner=runner)
+    if action == "optimize-wifi":
+        from wiredeck.wireless_actions import optimize_wifi
+        from wiredeck.wireless_probes import collect_wireless_snapshot
+
+        w_snap = snapshot_fn if snapshot_fn is not collect_system_snapshot else collect_wireless_snapshot
+        return optimize_wifi(paths, cfg, runner=runner, snapshot_fn=w_snap)
+    if action == "restore-wifi":
+        from wiredeck.wireless_actions import restore_wifi
+        from wiredeck.wireless_probes import collect_wireless_snapshot
+
+        w_snap = snapshot_fn if snapshot_fn is not collect_system_snapshot else collect_wireless_snapshot
+        return restore_wifi(paths, cfg, runner=runner, snapshot_fn=w_snap)
     if action == "run-ext":
         if not ext_id:
             return ActionResult(

@@ -77,15 +77,30 @@ def test_wiredeck_api_state_settings_export_and_bridge_toggle(tmp_path: Path):
     assert sample2["created"] is False
 
 
-    # Startup onboarding, per-preset isolated settings & built-in toolkits
+    # Startup onboarding with transport, per-preset isolated settings & built-in toolkits
     assert state["show_onboarding"] is True
-    onb = api.complete_onboarding("ja", "switch")
+    onb = api.complete_onboarding("ja", "switch", "wireless")
     assert onb["ok"] is True
     assert onb["config"]["onboarding_completed"] is True
     assert onb["config"]["language"] == "ja"
+    assert onb["config"]["active_transport"] == "wireless"
     assert onb["config"]["active_preset"] == "switch"
     assert onb["config"]["peer_ip"] == "192.168.50.20"
     assert api.get_state()["show_onboarding"] is False
+
+    # Switch back to wired cleanly and test wireless bridge APIs
+    assert api.set_transport("wired")["active_transport"] == "wired"
+    assert api.set_wireless_submode("lan")["wireless_submode"] == "lan"
+    assert api.save_settings({"wireless_peer_ip": "bad-ip"})["ok"] is False
+    assert api.save_settings({"wireless_peer_ip": "192.168.1.77"})["ok"] is True
+
+    # Built-in preview wireless report
+    w_api = WireDeckApi(paths=paths, preview_state="wireless")
+    w_rep = w_api.diagnose_wireless()
+    assert w_rep["transport"] == "wireless"
+    assert w_rep["mode"] == "hotspot"
+    creds = w_api.get_hotspot_credentials()
+    assert creds["ok"] is True and creds["ssid"] == "WireDeck-5G"
 
     # Edit Switch peer_ip, switch to PlayStation, verify Switch setting persists independently
     assert api.save_settings({"peer_ip": "192.168.50.25", "dns_servers": "119.29.29.29, 8.8.8.8"})["ok"] is True
@@ -120,6 +135,17 @@ def test_preview_states_are_deterministic_and_zero_pii():
     bp = build_preview_report("breakpoint")
     assert bp.primary_fault is not None
     assert bp.primary_fault.code == "VPN_TUN_ACTIVE"
+
+    from wiredeck.app import build_wireless_preview_report
+
+    for wmode in ("wireless", "wireless_lan", "wireless_wizard"):
+        wrep = build_wireless_preview_report(wmode)
+        wd = wrep.to_dict()
+        wraw = json.dumps(wd, ensure_ascii=False)
+        assert "65428" not in wraw
+        assert "PortableSSS" not in wraw
+        assert wd["transport"] == "wireless"
+        assert len(wd["layers"]) == 6
 
 
 def test_i18n_js_has_exact_key_parity_and_concise_home_copy():

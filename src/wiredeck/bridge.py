@@ -58,9 +58,11 @@ class LocalBridgeServer:
         diagnose_fn: Callable[[], DiagnosticReport],
         execute_action_fn: Callable[[str, dict[str, Any]], ActionResult],
         on_job_queued: Callable[[BridgeJob], None] | None = None,
+        diagnose_wireless_fn: Callable[[], DiagnosticReport] | None = None,
     ) -> None:
         self._paths = paths
         self._diagnose_fn = diagnose_fn
+        self._diagnose_wireless_fn = diagnose_wireless_fn
         self._execute_action_fn = execute_action_fn
         self._on_job_queued = on_job_queued
 
@@ -111,13 +113,19 @@ class LocalBridgeServer:
             def do_GET(self) -> None:  # noqa: N802
                 if not self._check_auth():
                     return
-                path = self.path.split("?", 1)[0]
+                path, _, qs = self.path.partition("?")
                 if path == "/api/v1/health":
                     self._send_json(200, {"ok": True, "version": APP_VERSION})
                     return
                 if path == "/api/v1/diagnose":
                     try:
-                        report = parent._diagnose_fn()
+                        want_wireless = "transport=wireless" in qs.lower()
+                        fn = (
+                            parent._diagnose_wireless_fn
+                            if (want_wireless and parent._diagnose_wireless_fn is not None)
+                            else parent._diagnose_fn
+                        )
+                        report = fn()
                         self._send_json(200, report.to_dict())
                     except Exception as exc:
                         self._send_json(500, {"ok": False, "code": "DIAGNOSE_ERROR", "message": str(exc)})

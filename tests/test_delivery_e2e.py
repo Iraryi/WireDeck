@@ -142,6 +142,31 @@ def test_tier_b_dual_pe_subsystems_and_cli_contract(tmp_path: Path):
     assert tk_run["ok"] is True
     assert "linux" in tk_run["data"] and "macos" in tk_run["data"]
 
+    # 6. Frozen CLI supports --transport wireless and lists all 20 bundled toolkits
+    r_wdiag = subprocess.run(
+        [str(CLI_EXE), "diagnose", "--transport", "wireless", "--json", "--no-network", "--no-extensions"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=25,
+        creationflags=CREATE_NO_WINDOW,
+    )
+    assert r_wdiag.returncode == 0, r_wdiag.stderr
+    wdiag = json.loads(r_wdiag.stdout)
+    assert wdiag["transport"] == "wireless"
+    assert len(wdiag["layers"]) == 6
+
+    r_tk_all = subprocess.run(
+        [str(CLI_EXE), "toolkit", "list", "--all", "--json"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=15,
+        creationflags=CREATE_NO_WINDOW,
+    )
+    assert r_tk_all.returncode == 0, r_tk_all.stderr
+    assert len(json.loads(r_tk_all.stdout)["toolkits"]) == 20
+
 
 @pytest.mark.skipif(not SHA_FILE.is_file(), reason="Release artifacts not built yet")
 def test_tier_b_release_checksums_and_portable_zip_contents():

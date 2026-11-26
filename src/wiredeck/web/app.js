@@ -13,8 +13,13 @@
   const state = {
     lang: "zh-CN",
     theme: "light",
+    transport: "wired",
+    wirelessSubmode: "hotspot",
     appState: null,
     report: null,
+    wirelessReport: null,
+    hotspotCreds: null,
+    showHotspotPass: false,
     extensions: [],
     toolkits: [],
     bridgeToken: "",
@@ -23,6 +28,7 @@
     pollTimer: null,
     busy: false,
     onbSelectedLang: "zh-CN",
+    onbSelectedTransport: "wired",
     onbSelectedPreset: "xbox",
     onboardingDismissed: false,
   };
@@ -38,8 +44,14 @@
       const k = el.getAttribute("data-i18n");
       if (k) el.textContent = t(k);
     });
+    document.querySelectorAll("[data-i18n-placeholder]").forEach((el) => {
+      const k = el.getAttribute("data-i18n-placeholder");
+      if (k) el.setAttribute("placeholder", t(k));
+    });
     const refreshBtn = document.getElementById("btnRefresh");
     if (refreshBtn) refreshBtn.title = t("btn_refresh");
+    const wRefreshBtn = document.getElementById("btnWRefresh");
+    if (wRefreshBtn) wRefreshBtn.title = t("btn_refresh");
     if (document.getElementById("onboardingModal").classList.contains("open")) {
       renderOnboardingModal();
     }
@@ -78,17 +90,44 @@
     return { skipped: 0, idle: 1, ok: 2, warn: 3, fail: 4 }[s] || 0;
   }
 
-  function switchView(name) {
+  async function switchView(name, skipTransportPersist) {
     document.querySelectorAll(".view").forEach((v) => v.classList.remove("active"));
     const target = document.getElementById("view" + name.charAt(0).toUpperCase() + name.slice(1));
     if (target) target.classList.add("active");
     document.querySelectorAll("[data-nav]").forEach((btn) => {
       btn.classList.toggle("active", btn.getAttribute("data-nav") === name);
     });
+
+    const api = getApi();
+    if (!skipTransportPersist && (name === "home" || name === "wireless")) {
+      const nextT = name === "wireless" ? "wireless" : "wired";
+      if (state.transport !== nextT) {
+        state.transport = nextT;
+        if (api && api.set_transport) {
+          await api.set_transport(nextT);
+        }
+        if (state.appState && state.appState.config) {
+          updateStatusBar(state.appState.config);
+        }
+        if (nextT === "wireless" && state.wirelessReport) {
+          renderWirelessReport(state.wirelessReport);
+        } else if (nextT === "wired" && state.report) {
+          renderReport(state.report);
+        }
+        const rep = nextT === "wireless" ? state.wirelessReport : state.report;
+        if (rep) updateWizardState(layerMapOf(rep), rep);
+      }
+    }
   }
 
   function getApi() {
     return window.pywebview && window.pywebview.api;
+  }
+
+  function layerMapOf(report) {
+    const byId = {};
+    ((report && report.layers) || []).forEach((l) => { byId[l.layer] = l; });
+    return byId;
   }
 
   function getActivePresetId(report) {
@@ -122,7 +161,7 @@
       CABLE_UNPLUGGED: ["網路線未插好", "請確認網路線已插緊電腦與開機後的目標裝置"],
       LINK_DEGRADED_100M: ["協商速率僅 100M", "建議更換 Cat5e/Cat6 千兆網路線以確保穩定頻寬"],
       NIC_HW_ERRORS: ["線材硬體錯包偏高", "偵測到大量傳輸錯包，建議重插或更換網路線"],
-      VPN_TUN_ACTIVE: ["VPN 接管預設路由", "請先暫時中斷 VPN 連線，再點「開啟遊戲直連」"],
+      VPN_TUN_ACTIVE: ["VPN 接管預設路由", "請先暫時中斷 VPN 連線再進行直連或無線串流"],
       ICS_ACTIVE: ["系統 ICS 衝突中", "Windows ICS 會佔用 TUN/WinNAT 連接埠，點「一鍵修復」清理"],
       PORT_53_67_OCCUPIED: ["UDP 53/67 埠被佔用", "系統 DHCP/DNS 連接埠衝突，請清理 ICS 或釋放佔用服務"],
       PORT_53_NON_ICS_WARNING: ["第三方本機 DNS 佔用 53 埠", "不影響有線直連；已略過以免誤關您的本機 DNS 程式"],
@@ -140,6 +179,20 @@
       STREAM_CLIENT_MISSING: ["未偵測到 Xbox 串流端", "建議於「首次精靈」下載已驗證的 XStreaming 或安裝 Xbox 應用"],
       PS_CLIENT_MISSING: ["未偵測到 PS 串流端", "建議於「首次精靈」取得 Chiaki-ng 或安裝 PS Remote Play"],
       HANDHELD_CLIENT_MISSING: ["未偵測到掌機串流端", "建議於「首次精靈」取得 Moonlight 或安裝 Steam / Sunshine"],
+      WIFI_NOT_FOUND: ["未偵測到無線網卡", "請確認無線網卡未被停用或插好 USB Wi-Fi 轉接器"],
+      WIFI_DISABLED: ["無線網卡已停用", "請在系統設定啟用無線介面卡或開啟 Wi-Fi 開關"],
+      WIFI_POWERSAVE_ENABLED: ["無線節能/封包合併開啟中", "偵測到 MIMO 節能或封包合併，建議開啟「無線防抖」關閉"],
+      WIFI_DISCONNECTED: ["Wi-Fi 尚未連線", "同 Wi-Fi 模式需要電腦與裝置連入同一無線路由器"],
+      WIFI_BAND_24GHZ: ["目前連在 2.4 GHz 頻段", "2.4 GHz 易受干擾導致畫面卡頓，建議切換 5 GHz 或開 5GHz 熱點"],
+      WIFI_SIGNAL_WEAK: ["無線訊號強度偏弱", "建議靠近路由器或開啟 5 GHz 電腦熱點直連"],
+      WIFI_LINK_SLOW: ["無線協商速率偏低", "高碼率串流建議使用 5 GHz / Wi-Fi 6 頻段"],
+      WIRED_NAT_CONFLICT: ["有線 WinNAT 運作中", "有線分享與行動熱點互斥，請先關閉有線直連"],
+      HOTSPOT_UNSUPPORTED: ["目前無法開啟行動熱點", "請確認電腦已連網且系統原則允許開啟熱點"],
+      HOTSPOT_BAND_24GHZ: ["熱點正運作於 2.4 GHz", "本機支援 5 GHz 熱點，點右側一鍵切換至 5 GHz"],
+      LAN_AP_ISOLATION_SUSPECTED: ["疑似路由器/校園網 AP 隔離", "閘道正常但同網段裝置無法直通，建議改用上方「5GHz 電腦熱點」"],
+      WIFI_BG_SCAN_ACTIVE: ["系統週期背景掃描開啟中", "Windows 定期掃描 Wi-Fi 易引發頓挫，點一鍵開啟防抖"],
+      WIFI_JITTER_HIGH: ["無線鏈路抖動偏高", "建議改用 5 GHz 熱點直連或更換較乾淨的頻道"],
+      WIFI_PEER_UNREACHABLE: ["無線裝置暫未回應", "請確認目標裝置已連入目前無線並已開機"],
     },
     "en": {
       NIC_NOT_FOUND: ["Wired NIC Not Found", "Check Ethernet hardware or plug in a USB wired adapter"],
@@ -149,7 +202,7 @@
       CABLE_UNPLUGGED: ["Cable Unplugged", "Plug Ethernet cable firmly into laptop and powered-on device"],
       LINK_DEGRADED_100M: ["100 Mbps Link", "Negotiated 100 Mbps; use a Cat5e/Cat6 Gigabit cable"],
       NIC_HW_ERRORS: ["Cable Packet Errors", "High hardware packet errors; reseat or replace Ethernet cable"],
-      VPN_TUN_ACTIVE: ["VPN Taking Over Route", "Disconnect your VPN first, then click Enable Direct"],
+      VPN_TUN_ACTIVE: ["VPN Taking Over Route", "Disconnect VPN first before wired direct or wireless streaming"],
       ICS_ACTIVE: ["Windows ICS Active", "Windows ICS conflicts with TUN/WinNAT; click Fix Now to clear"],
       PORT_53_67_OCCUPIED: ["UDP 53/67 In Use", "ICS/DHCP port conflict; clear ICS or stop conflicting service"],
       PORT_53_NON_ICS_WARNING: ["Local DNS on UDP 53", "Third-party local DNS uses port 53 (does not block Direct)"],
@@ -167,6 +220,20 @@
       STREAM_CLIENT_MISSING: ["No Xbox Stream Client", "Download verified XStreaming or install Xbox App in First Setup"],
       PS_CLIENT_MISSING: ["No PS Stream Client", "Get open-source Chiaki-ng or PS Remote Play in First Setup"],
       HANDHELD_CLIENT_MISSING: ["No Handheld Streamer", "Get Moonlight / Sunshine or use Steam Remote Play in First Setup"],
+      WIFI_NOT_FOUND: ["Wi-Fi Adapter Not Found", "Check laptop Wi-Fi hardware or plug in a USB Wi-Fi dongle"],
+      WIFI_DISABLED: ["Wi-Fi Adapter Disabled", "Enable Wi-Fi adapter in Windows settings or toggle Wi-Fi ON"],
+      WIFI_POWERSAVE_ENABLED: ["Wi-Fi Power-Save On", "MIMO SMPS / Packet Coalescing can stutter; click Fix Now to tune"],
+      WIFI_DISCONNECTED: ["Wi-Fi Not Connected", "Connect both PC and device to the same Wi-Fi network"],
+      WIFI_BAND_24GHZ: ["Connected on 2.4 GHz", "2.4 GHz suffers heavy interference; switch to 5 GHz or PC Hotspot"],
+      WIFI_SIGNAL_WEAK: ["Weak Wi-Fi Signal", "Move closer to router or start PC 5 GHz Hotspot for direct link"],
+      WIFI_LINK_SLOW: ["Low Wi-Fi PHY Rate", "Use 5 GHz / Wi-Fi 6 for smooth high-bitrate game streaming"],
+      WIRED_NAT_CONFLICT: ["Wired WinNAT Active", "Wired WireDeckNat conflicts with Mobile Hotspot; stop Wired first"],
+      HOTSPOT_UNSUPPORTED: ["Mobile Hotspot Unavailable", "Ensure internet connection exists and hotspot policy allows sharing"],
+      HOTSPOT_BAND_24GHZ: ["Hotspot Running 2.4 GHz", "5 GHz hotspot is supported; click Fix Now to lock 5 GHz band"],
+      LAN_AP_ISOLATION_SUSPECTED: ["AP Isolation Suspected", "Gateway responds but peer is blocked; use 5 GHz PC Hotspot instead"],
+      WIFI_BG_SCAN_ACTIVE: ["Background Wi-Fi Scan On", "Periodic Windows scans cause lag spikes; click Anti-Stutter to pause"],
+      WIFI_JITTER_HIGH: ["High Wi-Fi Jitter", "High RTT variance or packet loss; switch to 5 GHz Hotspot or cleaner channel"],
+      WIFI_PEER_UNREACHABLE: ["Wireless Device Unreachable", "Verify device is powered on and connected to current Wi-Fi/Hotspot"],
     },
     "ja": {
       NIC_NOT_FOUND: ["有線 LAN が見つかりません", "内蔵 LAN または USB 有線アダプターを確認してください"],
@@ -176,7 +243,7 @@
       CABLE_UNPLUGGED: ["LAN ケーブル未接続", "ケーブルが PC と電源オンの機器にしっかり挿さっているか確認してください"],
       LINK_DEGRADED_100M: ["100 Mbps リンクに低下", "Cat5e / Cat6 以上のギガビット対応ケーブルをご使用ください"],
       NIC_HW_ERRORS: ["ケーブル通信エラー多数", "ハードウェアエラーが増加しています。ケーブルを交換または差し直してください"],
-      VPN_TUN_ACTIVE: ["VPN がルートを専有中", "一度 VPN を切断してから「直結を有効化」を押してください"],
+      VPN_TUN_ACTIVE: ["VPN がルートを専有中", "直結や無線配信の前に一度 VPN を切断してください"],
       ICS_ACTIVE: ["Windows ICS が競合中", "Windows の ICS が WinNAT と競合します。「ワンクリック修復」で解除します"],
       PORT_53_67_OCCUPIED: ["UDP 53/67 ポート使用中", "ICS や DHCP 競合サービスを停止してください"],
       PORT_53_NON_ICS_WARNING: ["ローカル DNS が 53 番使用中", "他社ローカル DNS の利用であり直結はブロックされません"],
@@ -194,6 +261,20 @@
       STREAM_CLIENT_MISSING: ["Xbox 用アプリ未検出", "「初期設定」から検証済み XStreaming または Xbox アプリを導入してください"],
       PS_CLIENT_MISSING: ["PS 用配信アプリ未検出", "「初期設定」から Chiaki-ng または PS Remote Play を入手してください"],
       HANDHELD_CLIENT_MISSING: ["携帯機用配信アプリ未検出", "「初期設定」から Moonlight / Sunshine または Steam を導入してください"],
+      WIFI_NOT_FOUND: ["無線 LAN が見つかりません", "Wi-Fi アダプターが有効か USB 無線子機が接続されているか確認してください"],
+      WIFI_DISABLED: ["無線 LAN が無効です", "Windows 設定から Wi-Fi をオンにしてください"],
+      WIFI_POWERSAVE_ENABLED: ["無線省電力 / 結合が有効", "MIMO 省電力やパケット結合が遅延の原因になります。「無線安定化」で解除できます"],
+      WIFI_DISCONNECTED: ["Wi-Fi 未接続", "PC と端末を同じ Wi-Fi に接続してください"],
+      WIFI_BAND_24GHZ: ["2.4 GHz 帯で接続中", "2.4 GHz は干渉が多いため 5 GHz または 5G ホットスポットを推奨します"],
+      WIFI_SIGNAL_WEAK: ["Wi-Fi 電波が弱い", "ルーターに近づくか、PC の 5 GHz ホットスポットをご利用ください"],
+      WIFI_LINK_SLOW: ["リンク速度が低下中", "高画質ストリーミングには 5 GHz / Wi-Fi 6 接続を推奨します"],
+      WIRED_NAT_CONFLICT: ["有線 WinNAT が稼働中", "ホットスポットと競合するため、先に有線直結を停止してください"],
+      HOTSPOT_UNSUPPORTED: ["モバイルホットスポット不可", "PC のネット接続と共有ポリシーを確認してください"],
+      HOTSPOT_BAND_24GHZ: ["2.4 GHz ホットスポット稼働中", "5 GHz 帯に対応しています。ワンクリック修復で 5 GHz に切り替えます"],
+      LAN_AP_ISOLATION_SUSPECTED: ["AP 分離（プライバシー保護）疑い", "ルーター側で端末間通信が遮断されています。5 GHz PC ホットスポットを推奨します"],
+      WIFI_BG_SCAN_ACTIVE: ["バックグラウンドスキャン有効", "Windows の定期 Wi-Fi スキャンがラグの原因になります。無線安定化で一時停止できます"],
+      WIFI_JITTER_HIGH: ["無線のジッターが高い", "遅延ばらつきが大きいため、5 GHz ホットスポットまたは空いたチャンネルをご使用ください"],
+      WIFI_PEER_UNREACHABLE: ["無線端末から応答なし", "機器の電源と Wi-Fi/ホットスポット接続を確認してください"],
     },
   };
 
@@ -214,29 +295,39 @@
       const lf = localizeFault(report.primary_fault);
       return `${t("headline_issue_prefix")}${lf.title}`;
     }
+    if (report.transport === "wireless") {
+      if (report.mode === "hotspot") return t("w_headline_hotspot");
+      if (report.mode === "optimized") return t("w_headline_optimized");
+      return t("w_headline_normal");
+    }
     if (report.mode === "direct") return t("headline_direct");
     return t("headline_normal");
   }
 
   function setBusy(busy) {
     state.busy = busy;
-    const prog = document.getElementById("homeProgress");
-    if (prog) prog.classList.toggle("active", busy);
+    ["homeProgress", "wProgress"].forEach((id) => {
+      const p = document.getElementById(id);
+      if (p) p.classList.toggle("active", busy);
+    });
     const btnRef = document.getElementById("btnRefresh");
     const btnEn = document.getElementById("btnEnableDirect");
     const btnDis = document.getElementById("btnDisableDirect");
     if (btnRef) btnRef.disabled = busy;
     if (btnDis) btnDis.disabled = busy;
-    if (btnEn) {
-      const canEn = state.report ? Boolean(state.report.can_enable_direct) : false;
-      btnEn.disabled = busy || !canEn;
-    }
+    if (btnEn) btnEn.disabled = busy || !(state.report && state.report.can_enable_direct);
+
+    const wRef = document.getElementById("btnWRefresh");
+    const wP = document.getElementById("btnWPrimary");
+    const wS = document.getElementById("btnWSecondary");
+    if (wRef) wRef.disabled = busy;
+    if (wP) wP.disabled = busy;
+    if (wS) wS.disabled = busy;
   }
 
-  function renderLoadingSkeleton() {
-    const table = document.getElementById("diagTable");
+  function renderLoadingSkeleton(tableId, keys) {
+    const table = document.getElementById(tableId);
     if (!table || table.children.length > 0) return;
-    const keys = ["node_nic", "node_cable", "node_gate", "node_share", "node_console"];
     keys.forEach((k) => {
       const row = document.createElement("div");
       row.className = "diag-row sev-idle";
@@ -257,29 +348,55 @@
       return lf.message || lf.title;
     }
     const m = layer.metrics || {};
+    // Wired layers
     if (layer.layer === "L1") {
-      return m.selected_ethernet
-        ? `${m.selected_ethernet} · ${t("detail_ps_off")}`
-        : (layer.summary || "—");
+      return m.selected_ethernet ? `${m.selected_ethernet} · ${t("detail_ps_off")}` : (layer.summary || "—");
     }
     if (layer.layer === "L2") {
       if (layer.status === "idle") return t("detail_wait_nic");
       return layer.summary ? `${layer.summary} ${t("detail_full_duplex")}` : "—";
     }
-    if (layer.layer === "L3") {
-      return t("detail_no_conflict");
+    if (layer.layer === "L3") return t("detail_no_conflict");
+    if (layer.layer === "L4") return m.nat_active ? t("detail_nat_on") : t("detail_nat_standby");
+
+    // Wireless layers
+    if (layer.layer === "W1") {
+      const adapterName = m.description || m.selected_wifi || layer.summary || "—";
+      const optSuffix = (m.powersave_keywords || []).length === 0 ? t("w_detail_opt_on") : t("w_detail_opt_off");
+      return `${adapterName} · ${optSuffix}`;
     }
-    if (layer.layer === "L4") {
-      return m.nat_active ? t("detail_nat_on") : t("detail_nat_standby");
+    if (layer.layer === "W2") {
+      if (layer.status === "idle") return layer.summary || t("detail_wait_nic");
+      const parts = [];
+      if (m.band) parts.push(m.band);
+      if (m.channel) parts.push(`Ch${m.channel}`);
+      if (m.rssi_dbm !== null && m.rssi_dbm !== undefined) parts.push(`${m.rssi_dbm} dBm`);
+      if (m.rx_rate_mbps) parts.push(`${Math.round(m.rx_rate_mbps)} Mbps`);
+      return parts.join(" · ") || layer.summary || "—";
     }
-    if (layer.layer === "L5/L6") {
+    if (layer.layer === "W3") {
+      if (m.submode === "hotspot") {
+        if (m.hotspot_state === "On") {
+          return `${t("w_detail_hotspot_on")} (${m.hotspot_band}) · ${m.hotspot_client_count || 0} ${t("w_clients")}`;
+        }
+        return t("w_detail_hotspot_off");
+      }
+      return t("w_detail_lan_ok");
+    }
+    if (layer.layer === "W4") {
+      return m.autoconfig_enabled === false ? t("w_detail_scan_paused") : t("w_detail_scan_active");
+    }
+    if (layer.layer === "L5/L6" || layer.layer === "W5/W6") {
+      const isWireless = layer.layer === "W5/W6";
       if (layer.status === "idle") {
         const appTail = combinedL6 && combinedL6.status === "ok" ? ` · ${t("detail_client_ready")}` : "";
-        return t("detail_wait_cable") + appTail;
+        return (isWireless ? t("w_detail_no_peer") : t("detail_wait_cable")) + appTail;
       }
       const parts = [];
-      if (m.peer_ip) parts.push(m.peer_ip);
+      const pip = m.peer_ip || m.target_peer_ip;
+      if (pip) parts.push(pip);
       if (typeof m.peer_rtt_ms === "number") parts.push(`${m.peer_rtt_ms.toFixed(1)} ms`);
+      if (isWireless && typeof m.jitter_ms === "number") parts.push(`jitter ${m.jitter_ms.toFixed(1)} ms`);
       if (combinedL6 && combinedL6.status === "ok") parts.push(t("detail_client_ready"));
       if (combinedL6 && combinedL6.status === "skipped") parts.push(t("detail_no_client_preset"));
       return parts.join(" · ") || "—";
@@ -287,68 +404,9 @@
     return layer.summary || "—";
   }
 
-  function renderReport(report) {
-    state.report = report;
-    const layers = report.layers || [];
-    const byId = {};
-    layers.forEach((l) => { byId[l.layer] = l; });
-
-    document.getElementById("modeLabel").textContent = t("mode_" + (report.mode || "normal"));
-
-    const dot = document.getElementById("headlineDot");
-    const pf = report.primary_fault;
-    dot.className = "status-led " + (pf ? pf.severity : (report.mode === "direct" ? "ok" : "idle"));
-    document.getElementById("headlineText").textContent = localizeHeadline(report);
-
-    const ethName = (byId.L1 && byId.L1.metrics && byId.L1.metrics.selected_ethernet) || "";
-    const speedTxt = (byId.L2 && byId.L2.summary) || "";
-    const shareActive = Boolean(byId.L4 && byId.L4.metrics && byId.L4.metrics.nat_active);
-    const metaParts = [];
-    if (ethName) metaParts.push(ethName);
-    if (speedTxt && speedTxt !== "待检测" && speedTxt !== "未插线") metaParts.push(speedTxt);
-    metaParts.push(shareActive ? t("meta_nat_on") : t("meta_nat_off"));
-    document.getElementById("ctrlMeta").textContent = metaParts.join(" · ") || "—";
-
-    const presetId = getActivePresetId(report);
-    const presetMeta = getActivePresetMeta(report);
-    document.getElementById("sbProfile").textContent = t(`preset_${presetId}_name`);
-
-    const launchBtn = document.getElementById("btnLaunchStream");
-    const launchSep = document.getElementById("sbLaunchSep");
-    const showLaunch = Boolean(presetMeta.uses_stream_client);
-    if (launchBtn) launchBtn.style.display = showLaunch ? "inline-flex" : "none";
-    if (launchSep) launchSep.style.display = showLaunch ? "inline" : "none";
-
-    // Combine L5 + L6 cleanly into Row 5 (never show OK when L5 itself is still idle/unplugged)
-    const l5 = byId.L5 || { layer: "L5", status: "idle", summary: "待检测", faults: [], metrics: {} };
-    const l6 = byId.L6 || { layer: "L6", status: "skipped", summary: "", faults: [], metrics: {} };
-    let combinedStatus = severityRank(l6.status) > severityRank(l5.status) ? l6.status : l5.status;
-    if (l5.status === "idle" && l6.status === "ok") {
-      combinedStatus = "idle";
-    }
-    const combinedSummary = severityRank(l5.status) >= severityRank(l6.status) ? l5.summary : l6.summary;
-    const combinedNode = {
-      key: "node_console",
-      l6Ref: l6,
-      layerObj: {
-        layer: "L5/L6",
-        name: t("node_console"),
-        status: combinedStatus,
-        summary: combinedSummary,
-        faults: [...(l5.faults || []), ...(l6.faults || [])],
-        metrics: Object.assign({}, l5.metrics, l6.metrics),
-      },
-    };
-
-    const rows = [
-      { key: "node_nic", layerObj: byId.L1 },
-      { key: "node_cable", layerObj: byId.L2 },
-      { key: "node_gate", layerObj: byId.L3 },
-      { key: "node_share", layerObj: byId.L4 },
-      combinedNode,
-    ];
-
-    const table = document.getElementById("diagTable");
+  function renderDiagnosticRows(tableId, rows, emptyHandler) {
+    const table = document.getElementById(tableId);
+    if (!table) return;
     table.innerHTML = "";
     rows.forEach((r) => {
       const l = r.layerObj || { layer: "", status: "idle", summary: "—", faults: [] };
@@ -380,33 +438,33 @@
         rightBox.appendChild(fixBtn);
       }
 
-      rowEl.addEventListener("click", () => openNodeDetail(t(r.key), l));
+      rowEl.addEventListener("click", () => emptyHandler(t(r.key), l));
       table.appendChild(rowEl);
     });
+  }
 
-    const bpCard = document.getElementById("breakpointCard");
+  function renderInfoBar(cardId, iconId, titleId, msgId, pillId, btnId, report, layers) {
+    const bpCard = document.getElementById(cardId);
+    const pf = report.primary_fault;
+    if (!bpCard) return;
     if (pf) {
       const allFails = layers.flatMap((x) => (x.faults || []).filter((f) => f.severity === "fail"));
       const extraFails = Math.max(0, allFails.length - (pf.severity === "fail" ? 1 : 0));
       const lf = localizeFault(pf);
       bpCard.classList.remove("hidden");
       bpCard.classList.toggle("warn", pf.severity === "warn");
-      document.getElementById("bpIcon").textContent = pf.severity === "warn" ? "!" : "✕";
-      document.getElementById("bpTitle").textContent = lf.title;
+      document.getElementById(iconId).textContent = pf.severity === "warn" ? "!" : "✕";
+      document.getElementById(titleId).textContent = lf.title;
       const suffix = extraFails > 0 ? ` (${t("more_blockers").replace("{n}", String(extraFails))})` : "";
-      document.getElementById("bpMessage").textContent = lf.message + suffix;
-      document.getElementById("bpExtPill").style.display = pf.source === "extension" ? "inline-flex" : "none";
+      document.getElementById(msgId).textContent = lf.message + suffix;
+      document.getElementById(pillId).style.display = pf.source === "extension" ? "inline-flex" : "none";
 
-      const fixBtn = document.getElementById("bpFixBtn");
+      const fixBtn = document.getElementById(btnId);
       if (pf.fix_action) {
         fixBtn.style.display = "inline-flex";
-        if (pf.fix_action === "clear-netnat") {
-          fixBtn.textContent = t("btn_confirm_clear");
-        } else if (pf.fix_action === "download-stream") {
-          fixBtn.textContent = t("btn_download_stream");
-        } else {
-          fixBtn.textContent = t("btn_fix_now");
-        }
+        if (pf.fix_action === "clear-netnat") fixBtn.textContent = t("btn_confirm_clear");
+        else if (pf.fix_action === "download-stream") fixBtn.textContent = t("btn_download_stream");
+        else fixBtn.textContent = t("btn_fix_now");
         fixBtn.onclick = () => handleFixAction(pf);
       } else {
         fixBtn.style.display = "none";
@@ -414,24 +472,232 @@
     } else {
       bpCard.classList.add("hidden");
     }
+  }
+
+  function combinePeerAndApp(baseLayer, appLayer, combinedId, titleKey) {
+    let combinedStatus = severityRank(appLayer.status) > severityRank(baseLayer.status) ? appLayer.status : baseLayer.status;
+    if (baseLayer.status === "idle" && appLayer.status === "ok") {
+      combinedStatus = "idle";
+    }
+    const combinedSummary = severityRank(baseLayer.status) >= severityRank(appLayer.status) ? baseLayer.summary : appLayer.summary;
+    return {
+      key: titleKey,
+      l6Ref: appLayer,
+      layerObj: {
+        layer: combinedId,
+        name: t(titleKey),
+        status: combinedStatus,
+        summary: combinedSummary,
+        faults: [...(baseLayer.faults || []), ...(appLayer.faults || [])],
+        metrics: Object.assign({}, baseLayer.metrics, appLayer.metrics),
+      },
+    };
+  }
+
+  function updateStatusBar(cfg) {
+    const presetId = getActivePresetId(state.report);
+    const presetMeta = getActivePresetMeta(state.report);
+    document.getElementById("sbProfile").textContent = t(`preset_${presetId}_name`);
+
+    const sbSub = document.getElementById("sbSubnet");
+    if (state.transport === "wireless") {
+      const subTxt = state.wirelessSubmode === "lan" ? t("sb_lan") : t("sb_hotspot");
+      const lanSsid = state.wirelessReport && state.wirelessReport.layers && (state.wirelessReport.layers.find((x) => x.layer === "W2")?.metrics?.ssid);
+      const ssid = state.wirelessSubmode === "lan"
+        ? (lanSsid || "")
+        : ((state.hotspotCreds && state.hotspotCreds.ssid) || lanSsid || "");
+      sbSub.textContent = ssid ? `${subTxt} · ${ssid}` : subTxt;
+    } else {
+      sbSub.textContent = `${cfg.host_ip || "192.168.50.2"} → ${cfg.peer_ip || "192.168.50.1"}`;
+    }
+
+    const launchBtn = document.getElementById("btnLaunchStream");
+    const launchSep = document.getElementById("sbLaunchSep");
+    const showLaunch = Boolean(presetMeta.uses_stream_client);
+    if (launchBtn) launchBtn.style.display = showLaunch ? "inline-flex" : "none";
+    if (launchSep) launchSep.style.display = showLaunch ? "inline" : "none";
+  }
+
+  function renderReport(report) {
+    state.report = report;
+    const layers = report.layers || [];
+    const byId = layerMapOf(report);
+
+    if (state.transport === "wired") {
+      document.getElementById("modeLabel").textContent = t("mode_" + (report.mode || "normal"));
+    }
+
+    const dot = document.getElementById("headlineDot");
+    const pf = report.primary_fault;
+    dot.className = "status-led " + (pf ? pf.severity : (report.mode === "direct" ? "ok" : "idle"));
+    document.getElementById("headlineText").textContent = localizeHeadline(report);
+
+    const ethName = (byId.L1 && byId.L1.metrics && byId.L1.metrics.selected_ethernet) || "";
+    const speedTxt = (byId.L2 && byId.L2.summary) || "";
+    const shareActive = Boolean(byId.L4 && byId.L4.metrics && byId.L4.metrics.nat_active);
+    const metaParts = [];
+    if (ethName) metaParts.push(ethName);
+    if (speedTxt && speedTxt !== "待检测" && speedTxt !== "未插线") metaParts.push(speedTxt);
+    metaParts.push(shareActive ? t("meta_nat_on") : t("meta_nat_off"));
+    document.getElementById("ctrlMeta").textContent = metaParts.join(" · ") || "—";
+
+    const l5 = byId.L5 || { layer: "L5", status: "idle", summary: "", faults: [], metrics: {} };
+    const l6 = byId.L6 || { layer: "L6", status: "skipped", summary: "", faults: [], metrics: {} };
+    const rows = [
+      { key: "node_nic", layerObj: byId.L1 },
+      { key: "node_cable", layerObj: byId.L2 },
+      { key: "node_gate", layerObj: byId.L3 },
+      { key: "node_share", layerObj: byId.L4 },
+      combinePeerAndApp(l5, l6, "L5/L6", "node_console"),
+    ];
+    renderDiagnosticRows("diagTable", rows, openNodeDetail);
+    renderInfoBar("breakpointCard", "bpIcon", "bpTitle", "bpMessage", "bpExtPill", "bpFixBtn", report, layers);
 
     const btnEn = document.getElementById("btnEnableDirect");
     btnEn.disabled = state.busy || !report.can_enable_direct;
     btnEn.title = report.can_enable_direct ? "" : t("disabled_hint");
     document.getElementById("btnDisableDirect").disabled = state.busy;
 
-    updateWizardState(byId, report);
     if (byId.L1 && byId.L1.metrics && byId.L1.metrics.physical_ethernets) {
-      populateNicSelect(byId.L1.metrics.physical_ethernets);
+      populateSelect("setEth", byId.L1.metrics.physical_ethernets, (state.appState && state.appState.config && state.appState.config.ethernet_interface) || "");
+    }
+    if (state.transport === "wired") {
+      updateWizardState(byId, report);
+      updateStatusBar((state.appState && state.appState.config) || {});
     }
   }
 
-  function updateWizardState(byId, report) {
-    const l1 = byId.L1 || { status: "idle" };
-    const l2 = byId.L2 || { status: "idle" };
-    const l5 = byId.L5 || { status: "idle" };
-    const l6 = byId.L6 || { status: "skipped", faults: [], metrics: {} };
+  function renderWirelessReport(report) {
+    state.wirelessReport = report;
+    const layers = report.layers || [];
+    const byId = layerMapOf(report);
+    const w1 = byId.W1 || { status: "idle", metrics: {} };
+    const w2 = byId.W2 || { status: "idle", metrics: {} };
+    const w3 = byId.W3 || { status: "idle", metrics: {} };
+    const w4 = byId.W4 || { status: "idle", metrics: {} };
+    const w5 = byId.W5 || { status: "idle", faults: [], metrics: {} };
+    const w6 = byId.W6 || { status: "skipped", faults: [], metrics: {} };
 
+    const hsOn = Boolean(w3.metrics && w3.metrics.hotspot_state === "On");
+    const antiOn = Boolean(w4.metrics && w4.metrics.anti_stutter_active);
+
+    if (state.transport === "wireless") {
+      const mKey = report.mode === "hotspot" ? "w_mode_hotspot" : (report.mode === "optimized" ? "w_mode_optimized" : ("mode_" + (report.mode === "blocked" ? "blocked" : "normal")));
+      document.getElementById("modeLabel").textContent = t(mKey);
+    }
+
+    const dot = document.getElementById("wHeadlineDot");
+    const pf = report.primary_fault;
+    dot.className = "status-led " + (pf ? pf.severity : (hsOn || antiOn ? "ok" : "idle"));
+    document.getElementById("wHeadlineText").textContent = localizeHeadline(report);
+
+    const metaParts = [];
+    const m1 = w1.metrics || {};
+    const m2 = w2.metrics || {};
+    if (m1.description || m1.selected_wifi) metaParts.push(m1.description || m1.selected_wifi);
+    if (m2.connected) {
+      if (m2.band) metaParts.push(m2.band + (m2.channel ? ` Ch${m2.channel}` : ""));
+      if (m2.rssi_dbm !== null && m2.rssi_dbm !== undefined) metaParts.push(`${m2.rssi_dbm} dBm`);
+    }
+    if (hsOn) metaParts.push(t("w_detail_hotspot_on"));
+    else if (antiOn) metaParts.push(t("w_detail_opt_on"));
+    document.getElementById("wCtrlMeta").textContent = metaParts.join(" · ") || "—";
+
+    // Submode toggle state
+    document.getElementById("btnSubHotspot").classList.toggle("active", state.wirelessSubmode === "hotspot");
+    document.getElementById("btnSubLan").classList.toggle("active", state.wirelessSubmode === "lan");
+    document.getElementById("wHotspotStrip").style.display = state.wirelessSubmode === "hotspot" ? "flex" : "none";
+    document.getElementById("wLanStrip").style.display = state.wirelessSubmode === "lan" ? "flex" : "none";
+
+    // Primary / Secondary control bar buttons
+    const btnP = document.getElementById("btnWPrimary");
+    const btnS = document.getElementById("btnWSecondary");
+    if (state.wirelessSubmode === "hotspot") {
+      if (hsOn) {
+        btnP.textContent = t("w_btn_stop_hotspot");
+        btnP.className = "btn";
+        btnP.onclick = () => runAction("disable-hotspot", {});
+      } else {
+        btnP.textContent = t("w_btn_start_hotspot");
+        btnP.className = "btn btn-primary";
+        btnP.onclick = () => startHotspotWithCheck();
+      }
+      if (antiOn) {
+        btnS.textContent = t("w_btn_restore");
+        btnS.onclick = () => runAction("restore-wifi", {});
+      } else {
+        btnS.textContent = t("w_btn_optimize");
+        btnS.onclick = () => runAction("optimize-wifi", {});
+      }
+    } else {
+      if (antiOn) {
+        btnP.textContent = t("w_btn_restore");
+        btnP.className = "btn";
+        btnP.onclick = () => runAction("restore-wifi", {});
+      } else {
+        btnP.textContent = t("w_btn_optimize");
+        btnP.className = "btn btn-primary";
+        btnP.onclick = () => runAction("optimize-wifi", {});
+      }
+      if (hsOn) {
+        btnS.textContent = t("w_btn_stop_hotspot");
+        btnS.onclick = () => runAction("disable-hotspot", {});
+      } else {
+        btnS.textContent = t("w_btn_start_hotspot");
+        btnS.onclick = () => startHotspotWithCheck();
+      }
+    }
+
+    // Populate hotspot strip
+    const ssidVal = (state.hotspotCreds && state.hotspotCreds.ssid) || (w3.metrics && w3.metrics.hotspot_ssid) || "—";
+    document.getElementById("wHotspotSsid").textContent = ssidVal;
+    const passVal = (state.hotspotCreds && state.hotspotCreds.passphrase) || "";
+    document.getElementById("wHotspotPass").textContent = state.showHotspotPass && passVal ? passVal : "••••••••";
+    document.getElementById("btnWShowPass").textContent = t(state.showHotspotPass ? "w_hide" : "w_show");
+
+    const clients = (w3.metrics && w3.metrics.hotspot_clients) || [];
+    const clientPill = document.getElementById("wClientPill");
+    if (clients.length > 0) {
+      clientPill.textContent = `${t("w_clients")}: ${clients[0].ip}`;
+    } else {
+      clientPill.textContent = t("w_no_client");
+    }
+
+    // 5-row wireless table
+    const rows = [
+      { key: "w_node_nic", layerObj: w1 },
+      { key: "w_node_rf", layerObj: w2 },
+      { key: "w_node_net", layerObj: w3 },
+      { key: "w_node_gate", layerObj: w4 },
+      combinePeerAndApp(w5, w6, "W5/W6", "w_node_device"),
+    ];
+    renderDiagnosticRows("wDiagTable", rows, openNodeDetail);
+    renderInfoBar("wBreakpointCard", "wBpIcon", "wBpTitle", "wBpMessage", "wBpExtPill", "wBpFixBtn", report, layers);
+
+    if (m1.wifi_adapters) {
+      populateSelect("setWifi", m1.wifi_adapters, (state.appState && state.appState.config && state.appState.config.wifi_interface) || "");
+    }
+    if (state.transport === "wireless") {
+      updateWizardState(byId, report);
+      updateStatusBar((state.appState && state.appState.config) || {});
+    }
+  }
+
+  function startHotspotWithCheck() {
+    const wiredActive = state.wirelessReport && state.wirelessReport.layers
+      && state.wirelessReport.layers.some((l) => l.layer === "W3" && l.metrics && l.metrics.wired_nat_active);
+    if (wiredActive) {
+      document.getElementById("confirmTitle").textContent = t("confirm_switch_from_wired_title");
+      document.getElementById("confirmBody").textContent = t("confirm_switch_from_wired_body");
+      state.confirmCallback = () => runAction("enable-hotspot", { force: true });
+      document.getElementById("confirmModal").classList.add("open");
+      return;
+    }
+    runAction("enable-hotspot", {});
+  }
+
+  function updateWizardState(byId, report) {
+    const isWireless = report && report.transport === "wireless";
     const presetId = getActivePresetId(report);
     const presetMeta = getActivePresetMeta(report);
     const steps = presetMeta.wizard_steps || DEFAULT_WIZARD_STEPS[presetId] || ["nic", "peer"];
@@ -445,67 +711,92 @@
     const elS2 = document.getElementById("wizStep2");
     const elS3 = document.getElementById("wizStep3");
     const elS4 = document.getElementById("wizStep4");
-
     elS1.style.display = hasNic ? "flex" : "none";
     elS2.style.display = hasUwp ? "flex" : "none";
     elS3.style.display = hasClient ? "flex" : "none";
     elS4.style.display = hasPeer ? "block" : "none";
 
-    // Dynamic sequential numbering (e.g. PS has 1,2,3; Switch has 1,2; Xbox has 1,2,3,4)
     let stepNum = 1;
-    if (hasNic) document.getElementById("wizS1Title").textContent = `${stepNum++}. ${t("wiz_nic_title")}`;
+    if (hasNic) document.getElementById("wizS1Title").textContent = `${stepNum++}. ${t(isWireless ? "w_wiz_s1_title" : "wiz_nic_title")}`;
     if (hasUwp) document.getElementById("wizS2Title").textContent = `${stepNum++}. ${t("wiz_uwp_title")}`;
     if (hasClient) document.getElementById("wizS3Title").textContent = `${stepNum++}. ${t("wiz_client_title")}`;
-    if (hasPeer) document.getElementById("wizS4Title").textContent = `${stepNum++}. ${t("wiz_peer_title")}`;
+    if (hasPeer) document.getElementById("wizS4Title").textContent = `${stepNum++}. ${t(isWireless ? "w_wiz_s4_title" : "wiz_peer_title")}`;
 
-    const s1Status = (l1.status === "ok" && l2.status === "ok") ? "ok" : (l1.status === "fail" ? "fail" : "warn");
+    // Step 1 adaptation (Wired NIC vs Wi-Fi Anti-Stutter)
+    document.getElementById("wizS1Desc").textContent = t(isWireless ? "w_wiz_s1_desc" : "wiz_s1_desc");
+    document.getElementById("btnWizFixNic").textContent = t(isWireless ? "w_wiz_s1_btn" : "wiz_s1_btn");
+
+    let s1Status = "idle";
+    if (isWireless) {
+      const w1 = byId.W1 || { status: "idle" };
+      const w4 = byId.W4 || { status: "idle" };
+      s1Status = (w1.status === "ok" && w4.status === "ok") ? "ok" : (w1.status === "fail" ? "fail" : "warn");
+    } else {
+      const l1 = byId.L1 || { status: "idle" };
+      const l2 = byId.L2 || { status: "idle" };
+      s1Status = (l1.status === "ok" && l2.status === "ok") ? "ok" : (l1.status === "fail" ? "fail" : "warn");
+    }
     setBadge("wizS1Badge", s1Status);
     let hasWizTodo = (s1Status !== "ok");
 
+    const appLayer = isWireless ? (byId.W6 || { faults: [], metrics: {} }) : (byId.L6 || { faults: [], metrics: {} });
+    const peerLayer = isWireless ? (byId.W5 || { status: "idle", metrics: {} }) : (byId.L5 || { status: "idle", metrics: {} });
+
     if (hasUwp) {
-      const hasUwpMiss = (l6.faults || []).some((f) => f.code === "UWP_LOOPBACK_MISSING");
+      const hasUwpMiss = (appLayer.faults || []).some((f) => f.code === "UWP_LOOPBACK_MISSING");
       setBadge("wizS2Badge", hasUwpMiss ? "warn" : "ok");
       if (hasUwpMiss) hasWizTodo = true;
     }
 
     if (hasClient) {
-      const hasClientMiss = (l6.faults || []).some((f) =>
+      const hasClientMiss = (appLayer.faults || []).some((f) =>
         f.code === "STREAM_CLIENT_MISSING" || f.code === "PS_CLIENT_MISSING" || f.code === "HANDHELD_CLIENT_MISSING"
       );
       setBadge("wizS3Badge", hasClientMiss ? "warn" : "ok");
       if (hasClientMiss) hasWizTodo = true;
 
       const s3Desc = document.getElementById("wizS3Desc");
-      const m6 = l6.metrics || {};
+      const m6 = appLayer.metrics || {};
       const btnDl = document.getElementById("btnWizDownload");
-      if (btnDl) {
-        btnDl.textContent = presetId === "xbox" ? t("wiz_s3_btn") : t("wiz_btn_open_release");
-      }
+      if (btnDl) btnDl.textContent = presetId === "xbox" ? t("wiz_s3_btn") : t("wiz_btn_open_release");
       if (s3Desc) {
         if (presetId === "xbox") {
-          if (m6.xstreaming_path) s3Desc.textContent = t("wiz_client_xstreaming");
-          else if (m6.xbox_app_installed) s3Desc.textContent = t("wiz_client_xbox");
-          else s3Desc.textContent = t("wiz_client_none");
+          s3Desc.textContent = m6.xstreaming_path ? t("wiz_client_xstreaming") : (m6.xbox_app_installed ? t("wiz_client_xbox") : t("wiz_client_none"));
         } else if (presetId === "playstation") {
-          if (m6.chiaki_path) s3Desc.textContent = t("wiz_client_ps_chiaki");
-          else if (m6.ps_remote_path) s3Desc.textContent = t("wiz_client_ps_remote");
-          else s3Desc.textContent = t("wiz_client_ps_none");
+          s3Desc.textContent = m6.chiaki_path ? t("wiz_client_ps_chiaki") : (m6.ps_remote_path ? t("wiz_client_ps_remote") : t("wiz_client_ps_none"));
         } else if (presetId === "handheld") {
-          if (m6.moonlight_path) s3Desc.textContent = t("wiz_client_hh_moonlight");
-          else if (m6.steam_path || m6.sunshine_path) s3Desc.textContent = t("wiz_client_hh_steam");
-          else s3Desc.textContent = t("wiz_client_hh_none");
+          s3Desc.textContent = m6.moonlight_path ? t("wiz_client_hh_moonlight") : ((m6.steam_path || m6.sunshine_path) ? t("wiz_client_hh_steam") : t("wiz_client_hh_none"));
         }
       }
     }
 
-    setBadge("wizS4Badge", l5.status === "ok" ? "ok" : "idle");
-
-    const nmcliBtn = document.getElementById("btnWizCopyNmcli");
-    if (nmcliBtn) {
-      nmcliBtn.style.display = (presetId === "handheld" || presetId === "other") ? "inline-flex" : "none";
-    }
+    // Step 4 adaptation (Wired static params vs Wireless hotspot/LAN)
+    setBadge("wizS4Badge", peerLayer.status === "ok" ? "ok" : "idle");
+    const ipBox = document.getElementById("wizIpBox");
+    const wBox = document.getElementById("wizWirelessBox");
+    const btnCopyIp = document.getElementById("btnWizCopyIp");
+    const btnNmcli = document.getElementById("btnWizCopyNmcli");
+    const s4Desc = document.getElementById("wizS4Desc");
     const tipLine = document.getElementById("wizTipLine");
-    if (tipLine) {
+
+    if (isWireless) {
+      ipBox.style.display = "none";
+      wBox.style.display = "grid";
+      btnCopyIp.style.display = "none";
+      btnNmcli.style.display = "none";
+      const isLan = state.wirelessSubmode === "lan";
+      s4Desc.textContent = t(isLan ? "w_wiz_s4_desc_lan" : "w_wiz_s4_desc_hotspot");
+      tipLine.textContent = t(isLan ? "w_wiz_tip_lan" : "w_wiz_tip_hotspot");
+      const ssidVal = (state.hotspotCreds && state.hotspotCreds.ssid) || "WireDeck-5G";
+      const targetIp = (peerLayer.metrics && peerLayer.metrics.target_peer_ip) || ((state.appState && state.appState.config && state.appState.config.wireless_peer_ip) || "—");
+      document.getElementById("wizHotspotSsid").textContent = isLan ? (byId.W2?.metrics?.ssid || "Wi-Fi LAN") : ssidVal;
+      document.getElementById("wizWirelessTarget").textContent = targetIp;
+    } else {
+      ipBox.style.display = "grid";
+      wBox.style.display = "none";
+      btnCopyIp.style.display = "inline-flex";
+      btnNmcli.style.display = (presetId === "handheld" || presetId === "other") ? "inline-flex" : "none";
+      s4Desc.textContent = t("wiz_peer_desc");
       tipLine.textContent = t(`wiz_tip_${presetId}`);
     }
 
@@ -556,14 +847,13 @@
 
   async function handleFixAction(fault) {
     if (fault.fix_action === "download-stream") {
-      switchView("wizard");
+      switchView("wizard", true);
       return;
     }
     if (fault.fix_action === "clear-netnat") {
       const names = (fault.details && fault.details.nat_names) ? fault.details.nat_names.join(", ") : "";
       document.getElementById("confirmTitle").textContent = t("confirm_netnat_title");
-      document.getElementById("confirmBody").textContent =
-        `${t("confirm_netnat_body")}${names ? " (" + names + ")" : ""}`;
+      document.getElementById("confirmBody").textContent = `${t("confirm_netnat_body")}${names ? " (" + names + ")" : ""}`;
       state.confirmCallback = () => runAction("clear-netnat", { force: true });
       document.getElementById("confirmModal").classList.add("open");
       return;
@@ -582,6 +872,11 @@
     showToast(t("toast_working"));
     try {
       const res = await api.run_action(action, opts || {});
+      if (!res.ok && res.code === "WIRED_NAT_CONFLICT" && action === "enable-hotspot") {
+        setBusy(false);
+        startHotspotWithCheck();
+        return;
+      }
       showToast(res.message || (res.ok ? "OK" : res.code));
       await refreshAll(true);
     } catch (err) {
@@ -591,16 +886,16 @@
     }
   }
 
-  function populateNicSelect(nics) {
-    const sel = document.getElementById("setEth");
-    const current = (state.appState && state.appState.config && state.appState.config.ethernet_interface) || "";
+  function populateSelect(selId, items, currentVal) {
+    const sel = document.getElementById(selId);
+    if (!sel) return;
     sel.innerHTML = `<option value="">${escapeHtml(t("set_eth_auto"))}</option>`;
-    nics.forEach((name) => {
+    items.forEach((name) => {
       if (!name) return;
       const opt = document.createElement("option");
       opt.value = name;
       opt.textContent = name;
-      if (name === current) opt.selected = true;
+      if (name === currentVal) opt.selected = true;
       sel.appendChild(opt);
     });
   }
@@ -665,9 +960,7 @@
       const m = e.manifest || {};
       const row = document.createElement("div");
       row.className = "list-row";
-      const badge = e.valid
-        ? `<span class="ext-tag">${escapeHtml(m.layer || "L1")}</span>`
-        : `<span class="sev-text fail">INVALID</span>`;
+      const badge = e.valid ? `<span class="ext-tag">${escapeHtml(m.layer || "L1")}</span>` : `<span class="sev-text fail">INVALID</span>`;
       const desc = e.valid ? (m.description || `author: ${m.author || "User"}`) : (e.errors || []).join("; ");
       row.innerHTML = `
         <div class="list-row-col">
@@ -705,6 +998,9 @@
     document.querySelectorAll("[data-onb-lang]").forEach((btn) => {
       btn.classList.toggle("active", btn.getAttribute("data-onb-lang") === state.onbSelectedLang);
     });
+    document.querySelectorAll("[data-onb-transport]").forEach((btn) => {
+      btn.classList.toggle("active", btn.getAttribute("data-onb-transport") === state.onbSelectedTransport);
+    });
     const grid = document.getElementById("onbPresetGrid");
     if (!grid) return;
     grid.innerHTML = "";
@@ -728,6 +1024,7 @@
   function openOnboardingModal() {
     const cfg = (state.appState && state.appState.config) || {};
     state.onbSelectedLang = state.lang || cfg.language || "zh-CN";
+    state.onbSelectedTransport = state.transport || cfg.active_transport || "wired";
     state.onbSelectedPreset = getActivePresetId(state.report) || cfg.active_preset || "xbox";
     renderOnboardingModal();
     document.getElementById("onboardingModal").classList.add("open");
@@ -779,6 +1076,8 @@
 
   function syncConfigDisplay(cfg) {
     state.lang = cfg.language || "zh-CN";
+    state.transport = cfg.active_transport || "wired";
+    state.wirelessSubmode = cfg.wireless_submode || "hotspot";
     applyTheme(cfg.theme || "light");
     applyI18n();
     const activeId = (state.appState && state.appState.active_preset && state.appState.active_preset.id)
@@ -791,11 +1090,14 @@
     document.getElementById("setHostIp").value = cfg.host_ip || "192.168.50.2";
     document.getElementById("setPeerIp").value = cfg.peer_ip || "192.168.50.1";
     document.getElementById("setDns").value = (cfg.dns_servers || ["223.5.5.5", "8.8.8.8"]).join(", ");
-    document.getElementById("sbSubnet").textContent = `${cfg.host_ip} → ${cfg.peer_ip}`;
+    document.getElementById("setWirelessPeerIp").value = cfg.wireless_peer_ip || "";
+    document.getElementById("setHotspot5G").checked = cfg.hotspot_prefer_5ghz !== false;
+    document.getElementById("wLanPeerInput").value = cfg.wireless_peer_ip || "";
     document.getElementById("cardPeerIp").textContent = cfg.peer_ip;
     document.getElementById("cardMask").textContent = cfg.subnet_mask || "255.255.255.0";
     document.getElementById("cardHostIp").textContent = cfg.host_ip;
     document.getElementById("cardDns").textContent = (cfg.dns_servers || ["223.5.5.5", "8.8.8.8"]).join(" / ");
+    updateStatusBar(cfg);
   }
 
   async function refreshAll(silent) {
@@ -808,21 +1110,31 @@
       document.getElementById("versionLabel").textContent = "v" + st.app_version;
       syncConfigDisplay(st.config);
       renderBridgeState(st.bridge);
-      const [rep, exts, tools] = await Promise.all([
+
+      const tasks = [
         api.diagnose(),
+        api.diagnose_wireless ? api.diagnose_wireless() : Promise.resolve(null),
+        api.get_hotspot_credentials ? api.get_hotspot_credentials() : Promise.resolve(null),
         api.list_extensions(),
         api.list_toolkits ? api.list_toolkits() : Promise.resolve([]),
-      ]);
-      renderReport(rep);
+      ];
+      const [rep, wRep, creds, exts, tools] = await Promise.all(tasks);
+      if (creds && creds.ok) state.hotspotCreds = creds;
+      if (rep) renderReport(rep);
+      if (wRep) renderWirelessReport(wRep);
       renderExtensions(exts);
       renderToolkits(tools);
 
+      if (!refreshAll._initialRouted) {
+        refreshAll._initialRouted = true;
+        if (st.preview_view) {
+          await switchView(st.preview_view, true);
+        } else if (state.transport === "wireless") {
+          await switchView("wireless", true);
+        }
+      }
       if (st.show_onboarding && !state.onboardingDismissed) {
         openOnboardingModal();
-      }
-      if (st.preview_view && !refreshAll._previewApplied) {
-        refreshAll._previewApplied = true;
-        switchView(st.preview_view);
       }
       if (!silent) showToast(t("toast_refreshed"));
     } finally {
@@ -854,9 +1166,7 @@
       const box = document.getElementById("aiPromptPreview");
       if (box) {
         box.textContent = res.prompt;
-        if (showPreview) {
-          box.style.display = "block";
-        }
+        if (showPreview) box.style.display = "block";
       }
       showToast(t("ai_copied_hint"));
     } else {
@@ -864,19 +1174,95 @@
     }
   }
 
+  async function saveLanPeerIp(raw) {
+    const api = getApi();
+    if (!api) return true;
+    const val = raw.trim();
+    const res = await api.save_settings({ wireless_peer_ip: val });
+    if (!res.ok) {
+      showToast(res.message || res.code);
+      return false;
+    }
+    document.getElementById("setWirelessPeerIp").value = val;
+    return true;
+  }
+
   function wireEvents() {
     document.querySelectorAll("[data-nav]").forEach((btn) => {
-      btn.addEventListener("click", () => switchView(btn.getAttribute("data-nav")));
+      btn.addEventListener("click", () => switchView(btn.getAttribute("data-nav"), false));
     });
-
-    document.getElementById("sbProfile").addEventListener("click", () => switchView("settings"));
+    document.getElementById("sbProfile").addEventListener("click", () => switchView("settings", true));
 
     document.getElementById("btnRefresh").addEventListener("click", () => refreshAll(false));
+    document.getElementById("btnWRefresh").addEventListener("click", () => refreshAll(false));
     document.getElementById("btnWizRefresh").addEventListener("click", () => refreshAll(false));
     document.getElementById("btnAiRefresh").addEventListener("click", () => refreshAll(false));
 
     document.getElementById("btnEnableDirect").addEventListener("click", () => runAction("enable-direct", {}));
     document.getElementById("btnDisableDirect").addEventListener("click", () => runAction("disable-direct", {}));
+
+    // Wireless submodes & credentials
+    document.getElementById("btnSubHotspot").addEventListener("click", async () => {
+      state.wirelessSubmode = "hotspot";
+      const api = getApi();
+      if (api && api.set_wireless_submode) await api.set_wireless_submode("hotspot");
+      await refreshAll(true);
+    });
+    document.getElementById("btnSubLan").addEventListener("click", async () => {
+      state.wirelessSubmode = "lan";
+      const api = getApi();
+      if (api && api.set_wireless_submode) await api.set_wireless_submode("lan");
+      await refreshAll(true);
+    });
+    document.getElementById("btnWShowPass").addEventListener("click", () => {
+      state.showHotspotPass = !state.showHotspotPass;
+      if (state.wirelessReport) renderWirelessReport(state.wirelessReport);
+    });
+    document.getElementById("btnWCopyPass").addEventListener("click", async () => {
+      const api = getApi();
+      let pass = state.hotspotCreds && state.hotspotCreds.passphrase;
+      if (!pass && api && api.get_hotspot_credentials) {
+        const c = await api.get_hotspot_credentials();
+        if (c && c.ok) {
+          state.hotspotCreds = c;
+          pass = c.passphrase;
+        }
+      }
+      if (pass) {
+        await copyText(pass);
+        showToast(t("toast_copied"));
+      }
+    });
+    document.getElementById("wLanPeerInput").addEventListener("blur", async (e) => {
+      await saveLanPeerIp(e.target.value);
+    });
+    document.getElementById("wLanPeerInput").addEventListener("keydown", async (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        if (await saveLanPeerIp(e.target.value)) {
+          document.getElementById("btnWTestJitter").click();
+        }
+      }
+    });
+    document.getElementById("btnWTestJitter").addEventListener("click", async () => {
+      const api = getApi();
+      if (!api || !api.ping_wireless_peer_now) return;
+      const inEl = document.getElementById("wLanPeerInput");
+      if (!(await saveLanPeerIp(inEl.value))) return;
+      const outEl = document.getElementById("wJitterResult");
+      outEl.style.color = "var(--text-sec)";
+      outEl.textContent = t("ping_testing");
+      const r = await api.ping_wireless_peer_now(inEl.value.trim());
+      if (r.ok) {
+        outEl.style.color = "var(--ok)";
+        outEl.textContent = `${r.avg_rtt_ms} ms (jitter ${r.jitter_ms} ms)`;
+      } else {
+        outEl.style.color = "var(--fail)";
+        outEl.textContent = t("ping_fail");
+      }
+    });
+
+    // AI actions
     document.getElementById("btnCopyAiQuick").addEventListener("click", () => exportAndCopyAi(false));
     document.getElementById("btnAiExportCopy").addEventListener("click", () => exportAndCopyAi(true));
     document.getElementById("btnAiPreviewPrompt").addEventListener("click", async () => {
@@ -902,7 +1288,8 @@
       await refreshAll(true);
     });
     document.getElementById("btnCopyCliCmd").addEventListener("click", async () => {
-      await copyText("wiredeck-cli.exe diagnose --json");
+      const cmd = state.transport === "wireless" ? "wiredeck-cli.exe diagnose --transport wireless --json" : "wiredeck-cli.exe diagnose --json";
+      await copyText(cmd);
       showToast(t("toast_copied"));
     });
 
@@ -915,7 +1302,9 @@
     document.getElementById("btnLaunchStream").addEventListener("click", launchFn);
     document.getElementById("btnWizLaunch").addEventListener("click", launchFn);
 
-    document.getElementById("btnWizFixNic").addEventListener("click", () => runAction("fix-nic", {}));
+    document.getElementById("btnWizFixNic").addEventListener("click", () => {
+      runAction(state.transport === "wireless" ? "optimize-wifi" : "fix-nic", {});
+    });
     document.getElementById("btnWizFixUwp").addEventListener("click", () => runAction("fix-uwp", {}));
     document.getElementById("btnWizTestPeer").addEventListener("click", async () => {
       const api = getApi();
@@ -923,6 +1312,18 @@
       const box = document.getElementById("peerPingResult");
       box.className = "peer-ping-result show";
       box.textContent = t("ping_testing");
+      if (state.transport === "wireless" && api.ping_wireless_peer_now) {
+        const res = await api.ping_wireless_peer_now("");
+        if (res.ok) {
+          box.className = "peer-ping-result show ok";
+          box.textContent = `● ${res.target_ip} ${t("ping_ok")} (${res.avg_rtt_ms} ms / jitter ${res.jitter_ms} ms)`;
+          setBadge("wizS4Badge", "ok");
+        } else {
+          box.className = "peer-ping-result show fail";
+          box.textContent = `✕ ${t("ping_fail")}`;
+        }
+        return;
+      }
       const res = await api.ping_peer_now();
       if (res.ok) {
         const rttTxt = typeof res.rtt_ms === "number" ? ` (${res.rtt_ms.toFixed(1)} ms)` : "";
@@ -943,7 +1344,7 @@
     document.getElementById("btnWizCopyNmcli").addEventListener("click", async () => {
       const api = getApi();
       const cfg = (state.appState && state.appState.config) || {};
-      let cmd = `sudo nmcli con mod "Wired connection 1" ipv4.method manual ipv4.addresses ${cfg.peer_ip || "192.168.50.30"}/${cfg.prefix_length || 24} ipv4.gateway ${cfg.host_ip || "192.168.50.2"} ipv4.dns "${(cfg.dns_servers || ["223.5.5.5", "8.8.8.8"]).join(" ")}" && sudo nmcli con up "Wired connection 1"`;
+      let cmd = `sudo nmcli con add type ethernet ifname eth0 con-name wiredeck-direct ipv4.method manual ipv4.addresses ${cfg.peer_ip || "192.168.50.30"}/${cfg.prefix_length || 24} ipv4.gateway ${cfg.host_ip || "192.168.50.2"} ipv4.dns "${(cfg.dns_servers || ["223.5.5.5", "8.8.8.8"]).join(" ")}" && sudo nmcli con up wiredeck-direct`;
       if (api && api.run_toolkit) {
         try {
           const r = await api.run_toolkit("handheld/emit-linux-nmcli-script");
@@ -976,7 +1377,7 @@
       document.getElementById("confirmModal").classList.add("open");
     });
 
-    // Startup Onboarding modal language pills + confirm
+    // Startup Onboarding modal controls
     document.querySelectorAll("[data-onb-lang]").forEach((btn) => {
       btn.addEventListener("click", () => {
         const lang = btn.getAttribute("data-onb-lang");
@@ -985,6 +1386,13 @@
         applyI18n();
         renderOnboardingModal();
         if (state.report) renderReport(state.report);
+        if (state.wirelessReport) renderWirelessReport(state.wirelessReport);
+      });
+    });
+    document.querySelectorAll("[data-onb-transport]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        state.onbSelectedTransport = btn.getAttribute("data-onb-transport");
+        renderOnboardingModal();
       });
     });
     document.getElementById("btnOnbStart").addEventListener("click", async () => {
@@ -992,12 +1400,13 @@
       state.onboardingDismissed = true;
       document.getElementById("onboardingModal").classList.remove("open");
       if (api && api.complete_onboarding) {
-        await api.complete_onboarding(state.onbSelectedLang, state.onbSelectedPreset);
+        await api.complete_onboarding(state.onbSelectedLang, state.onbSelectedPreset, state.onbSelectedTransport);
         await refreshAll(true);
+        await switchView(state.onbSelectedTransport === "wireless" ? "wireless" : "home", true);
       }
     });
 
-    // Live instant preview + auto-save on Theme / Language / Preset switch
+    // Settings instant switches
     document.getElementById("setTheme").addEventListener("change", async (e) => {
       applyTheme(e.target.value);
       const api = getApi();
@@ -1010,6 +1419,7 @@
       if (api) {
         await api.save_settings({ language: e.target.value });
         if (state.report) renderReport(state.report);
+        if (state.wirelessReport) renderWirelessReport(state.wirelessReport);
         if (state.toolkits.length) renderToolkits(state.toolkits);
       }
     });
@@ -1017,9 +1427,7 @@
       const api = getApi();
       if (!api || !api.switch_preset) return;
       const res = await api.switch_preset(e.target.value);
-      if (res && res.ok) {
-        await refreshAll(true);
-      }
+      if (res && res.ok) await refreshAll(true);
     });
 
     document.getElementById("bridgeToggle").addEventListener("change", async (e) => {
@@ -1043,9 +1451,12 @@
         language: document.getElementById("setLanguage").value,
         active_preset: document.getElementById("setProfile").value,
         ethernet_interface: document.getElementById("setEth").value,
+        wifi_interface: document.getElementById("setWifi").value,
+        hotspot_prefer_5ghz: Boolean(document.getElementById("setHotspot5G").checked),
         host_ip: document.getElementById("setHostIp").value.trim(),
         peer_ip: document.getElementById("setPeerIp").value.trim(),
         dns_servers: document.getElementById("setDns").value.trim(),
+        wireless_peer_ip: document.getElementById("setWirelessPeerIp").value.trim(),
       };
       const res = await api.save_settings(patch);
       if (!res.ok) {
@@ -1066,7 +1477,6 @@
       state.confirmCallback = null;
       if (cb) await cb();
     });
-
     document.getElementById("btnCloseDetail").addEventListener("click", () => {
       document.getElementById("detailModal").classList.remove("open");
     });
@@ -1076,7 +1486,6 @@
         showToast(t("toast_copied"));
       }
     });
-
     document.getElementById("btnBridgeDeny").addEventListener("click", async () => {
       document.getElementById("bridgeModal").classList.remove("open");
       const job = state.activeBridgeJob;
@@ -1091,9 +1500,7 @@
         showToast(t("toast_working"));
         const res = await getApi().approve_bridge_job(job.job_id, true);
         const jr = res && res.job && res.job.result;
-        if (jr && (jr.message || jr.code)) {
-          showToast(jr.message || jr.code);
-        }
+        if (jr && (jr.message || jr.code)) showToast(jr.message || jr.code);
         await refreshAll(true);
       }
     });
@@ -1102,7 +1509,8 @@
   window.addEventListener("DOMContentLoaded", () => {
     wireEvents();
     applyI18n();
-    renderLoadingSkeleton();
+    renderLoadingSkeleton("diagTable", ["node_nic", "node_cable", "node_gate", "node_share", "node_console"]);
+    renderLoadingSkeleton("wDiagTable", ["w_node_nic", "w_node_rf", "w_node_net", "w_node_gate", "w_node_device"]);
   });
 
   window.addEventListener("pywebviewready", () => {

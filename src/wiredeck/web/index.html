@@ -28,8 +28,15 @@
         <nav class="nav-list">
           <button class="nav-item active" data-nav="home" type="button">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg>
-            <span data-i18n="nav_home">主控台</span>
+            <span data-i18n="nav_wired">有线直连</span>
           </button>
+          <button class="nav-item" data-nav="wireless" type="button">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M5 12.55a11 11 0 0 1 14.08 0"/><path d="M8.53 16.11a6 6 0 0 1 6.95 0"/><circle cx="12" cy="19.5" r="1" fill="currentColor"/><path d="M1.42 9a16 16 0 0 1 21.16 0"/></svg>
+            <span data-i18n="nav_wireless">无线模式</span>
+          </button>
+
+          <div class="nav-divider"></div>
+
           <button class="nav-item" data-nav="wizard" type="button">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
             <span data-i18n="nav_wizard">首次向导</span>
@@ -52,20 +59,20 @@
 
         <div class="rail-foot">
           <span id="versionLabel">v0.1.0</span>
-          <span id="modeLabel">日常上网</span>
+          <span id="modeLabel">日常模式</span>
         </div>
       </aside>
 
       <!-- Main Workspace -->
       <main class="content-pane">
-        <!-- VIEW 1: OVERVIEW / HOME -->
+        <!-- VIEW 1: WIRED DIRECT (OVERVIEW / HOME) -->
         <section class="view active" id="viewHome">
           <div class="control-bar">
             <div class="progress-rail active" id="homeProgress"></div>
             <div class="ctrl-left">
               <span class="status-led idle" id="headlineDot"></span>
               <div>
-                <div class="ctrl-title" id="headlineText" data-i18n="loading_headline">正在检测有线直连状态…</div>
+                <div class="ctrl-title" id="headlineText" data-i18n="loading_headline">正在检测状态…</div>
                 <div class="ctrl-meta mono" id="ctrlMeta">—</div>
               </div>
             </div>
@@ -94,12 +101,71 @@
           <div class="group-box" id="diagTable"></div>
         </section>
 
-        <!-- VIEW 2: PRESET-TAILORED SETUP WIZARD -->
+        <!-- VIEW 1B: WIRELESS MODE (5G HOTSPOT + SAME-LAN WIFI) -->
+        <section class="view" id="viewWireless">
+          <div class="control-bar">
+            <div class="progress-rail" id="wProgress"></div>
+            <div class="ctrl-left">
+              <span class="status-led idle" id="wHeadlineDot"></span>
+              <div>
+                <div class="ctrl-title" id="wHeadlineText" data-i18n="loading_headline">正在检测状态…</div>
+                <div class="ctrl-meta mono" id="wCtrlMeta">—</div>
+              </div>
+            </div>
+            <div class="ctrl-actions">
+              <button class="btn btn-primary" id="btnWPrimary" type="button" data-i18n="w_btn_start_hotspot">开启 5GHz 热点</button>
+              <button class="btn" id="btnWSecondary" type="button" data-i18n="w_btn_optimize">开启无线防抖</button>
+              <button class="btn btn-icon" id="btnWRefresh" type="button" title="刷新">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><polyline points="21 3 21 9 15 9"/></svg>
+              </button>
+            </div>
+          </div>
+
+          <!-- Submode switcher + compact contextual strip -->
+          <div class="wireless-bar">
+            <div class="seg-group">
+              <button class="seg-btn active" id="btnSubHotspot" type="button" data-i18n="w_sub_hotspot">5GHz 电脑热点</button>
+              <button class="seg-btn" id="btnSubLan" type="button" data-i18n="w_sub_lan">同 Wi-Fi 局域网</button>
+            </div>
+
+            <div class="w-strip" id="wHotspotStrip">
+              <span class="w-kv"><span class="w-k" data-i18n="w_ssid">热点</span> <span class="mono w-v" id="wHotspotSsid">—</span></span>
+              <span class="w-kv"><span class="w-k" data-i18n="w_pass">密码</span> <span class="mono w-v" id="wHotspotPass">••••••••</span></span>
+              <button class="btn btn-sm" id="btnWShowPass" type="button" data-i18n="w_show">显示</button>
+              <button class="btn btn-sm" id="btnWCopyPass" type="button" data-i18n="w_copy_pass">复制密码</button>
+              <span class="ext-tag" id="wClientPill" data-i18n="w_no_client">等待设备接入热点</span>
+            </div>
+
+            <div class="w-strip" id="wLanStrip" style="display:none;">
+              <span class="w-k" data-i18n="w_lan_peer_label">设备 IP</span>
+              <input id="wLanPeerInput" class="mono w-ip-in" data-i18n-placeholder="w_lan_peer_placeholder" placeholder="例 192.168.1.88" />
+              <button class="btn btn-sm" id="btnWTestJitter" type="button" data-i18n="w_btn_test_jitter">测抖动</button>
+              <span class="mono w-jitter-txt" id="wJitterResult"></span>
+            </div>
+          </div>
+
+          <div class="infobar hidden" id="wBreakpointCard">
+            <div class="infobar-left">
+              <span class="infobar-ico" id="wBpIcon">!</span>
+              <div>
+                <span class="infobar-title" id="wBpTitle"></span>
+                <span class="ext-tag" id="wBpExtPill" style="display:none;margin-right:6px;" data-i18n="badge_ai_ext">AI 扩展</span>
+                <span class="infobar-msg" id="wBpMessage"></span>
+              </div>
+            </div>
+            <button class="btn btn-sm" id="wBpFixBtn" type="button" style="display:none"></button>
+          </div>
+
+          <div class="sec-label" data-i18n="w_sec_chain">无线链路诊断（点击行查看详情）</div>
+          <div class="group-box" id="wDiagTable"></div>
+        </section>
+
+        <!-- VIEW 2: TRANSPORT & PRESET-TAILORED SETUP WIZARD -->
         <section class="view" id="viewWizard">
           <div class="page-head">
             <div>
               <div class="page-title" data-i18n="wizard_title">首次准备向导</div>
-              <div class="page-sub" data-i18n="wizard_sub">已按当前设备预设裁剪步骤，绿灯项可直接跳过</div>
+              <div class="page-sub" data-i18n="wizard_sub">已按当前模式与设备预设裁剪步骤，绿灯项可直接跳过</div>
             </div>
             <button class="btn btn-sm" id="btnWizRefresh" type="button" data-i18n="btn_refresh">刷新</button>
           </div>
@@ -108,7 +174,7 @@
             <div class="list-row" id="wizStep1">
               <div class="list-row-col">
                 <div class="row-head"><span id="wizS1Badge" class="sev-text idle">○ 待命</span><span id="wizS1Title">1. 有线网口体检</span></div>
-                <div class="row-desc" data-i18n="wiz_s1_desc">唤醒禁用的网卡 / PCIe 通道，关闭 EEE 节能防卡顿</div>
+                <div class="row-desc" id="wizS1Desc" data-i18n="wiz_s1_desc">唤醒禁用的网卡 / PCIe 通道，关闭 EEE 节能防卡顿</div>
               </div>
               <div class="row-actions">
                 <button class="btn btn-sm" id="btnWizFixNic" type="button" data-i18n="wiz_s1_btn">唤醒并防抖</button>
@@ -149,11 +215,15 @@
                 </div>
               </div>
               <div class="peer-ping-result" id="peerPingResult"></div>
-              <div class="ip-box">
+              <div class="ip-box" id="wizIpBox">
                 <div><div class="ip-k" data-i18n="ip_label_addr">IP 地址</div><div class="ip-v mono" id="cardPeerIp">192.168.50.1</div></div>
                 <div><div class="ip-k" data-i18n="ip_label_mask">子网掩码</div><div class="ip-v mono" id="cardMask">255.255.255.0</div></div>
                 <div><div class="ip-k" data-i18n="ip_label_gw">默认网关</div><div class="ip-v mono" id="cardHostIp">192.168.50.2</div></div>
                 <div><div class="ip-k" data-i18n="ip_label_dns">DNS</div><div class="ip-v mono" id="cardDns">223.5.5.5 / 8.8.8.8</div></div>
+              </div>
+              <div class="ip-box ip-box-2" id="wizWirelessBox" style="display:none;">
+                <div><div class="ip-k" data-i18n="w_ssid">热点</div><div class="ip-v mono" id="wizHotspotSsid">—</div></div>
+                <div><div class="ip-k" data-i18n="w_clients">设备</div><div class="ip-v mono" id="wizWirelessTarget">—</div></div>
               </div>
               <div class="note-line" id="wizTipLine" data-i18n="wiz_tip_xbox"></div>
             </div>
@@ -212,7 +282,7 @@
             <div class="list-row">
               <div class="list-row-col">
                 <div class="row-head" data-i18n="ai_cli_title">无头 CLI（供终端 / DSH 直接调用）</div>
-                <div class="row-desc mono">wiredeck-cli.exe diagnose --json &nbsp;|&nbsp; toolkit list --json</div>
+                <div class="row-desc mono">wiredeck-cli.exe diagnose --transport wired|wireless --json &nbsp;|&nbsp; toolkit list --json</div>
               </div>
               <button class="btn btn-sm" id="btnCopyCliCmd" type="button" data-i18n="ai_copy_cli">复制诊断命令</button>
             </div>
@@ -236,12 +306,12 @@
           </details>
         </section>
 
-        <!-- VIEW 4: SETTINGS (Shared Host vs Independent Preset Config) -->
+        <!-- VIEW 4: SETTINGS (Shared Host vs Independent Preset Config, Zero Scrollbar) -->
         <section class="view view-compact" id="viewSettings">
           <div class="page-head">
             <div>
               <div class="page-title" data-i18n="settings_title">设置</div>
-              <div class="page-sub" data-i18n="settings_sub">各设备预设的参数相互独立保存，共享本机环境</div>
+              <div class="page-sub" data-i18n="settings_sub">各设备预设的参数相互独立保存，共享本机有线/无线环境</div>
             </div>
             <button class="btn btn-sm btn-primary" id="btnSaveSettings" type="button" data-i18n="btn_save">保存</button>
           </div>
@@ -270,6 +340,18 @@
                 <option value="" data-i18n="set_eth_auto">自动识别（推荐）</option>
               </select>
             </div>
+            <div class="setting-row compact">
+              <span class="setting-label" data-i18n="set_wifi">无线网卡</span>
+              <div class="row-actions" style="gap:10px;">
+                <label class="inline-check">
+                  <input type="checkbox" id="setHotspot5G" checked />
+                  <span data-i18n="set_hotspot_5g">热点优先 5 GHz</span>
+                </label>
+                <select id="setWifi">
+                  <option value="" data-i18n="set_eth_auto">自动识别（推荐）</option>
+                </select>
+              </div>
+            </div>
           </div>
 
           <div class="sec-label" data-i18n="set_sec_preset">当前设备预设（独立保存）</div>
@@ -281,20 +363,24 @@
                 <option value="playstation" data-i18n="preset_playstation_name">PlayStation 5 / PS4</option>
                 <option value="switch" data-i18n="preset_switch_name">Nintendo Switch / Switch 2</option>
                 <option value="handheld" data-i18n="preset_handheld_name">Steam Deck / ROG 掌机</option>
-                <option value="other" data-i18n="preset_other_name">其他有线设备（Linux / 树莓派）</option>
+                <option value="other" data-i18n="preset_other_name">其他设备（Linux / 树莓派 / Mini-PC）</option>
               </select>
             </div>
             <div class="setting-row compact">
-              <span class="setting-label" data-i18n="set_host_ip">电脑有线 IP</span>
-              <input id="setHostIp" class="mono" value="192.168.50.2" />
-            </div>
-            <div class="setting-row compact">
-              <span class="setting-label" data-i18n="set_peer_ip">设备静态 IP</span>
-              <input id="setPeerIp" class="mono" value="192.168.50.1" />
+              <span class="setting-label" data-i18n="set_host_ip">电脑 / 设备有线 IP</span>
+              <div class="ip-pair">
+                <input id="setHostIp" class="mono ip-half" value="192.168.50.2" />
+                <span class="sb-sep">→</span>
+                <input id="setPeerIp" class="mono ip-half" value="192.168.50.1" />
+              </div>
             </div>
             <div class="setting-row compact">
               <span class="setting-label" data-i18n="set_dns">DNS 服务器</span>
               <input id="setDns" class="mono" value="223.5.5.5, 8.8.8.8" />
+            </div>
+            <div class="setting-row compact">
+              <span class="setting-label" data-i18n="set_wireless_peer_ip">无线设备 IP（同 Wi-Fi 用）</span>
+              <input id="setWirelessPeerIp" class="mono" placeholder="192.168.1.88" />
             </div>
           </div>
 
@@ -332,10 +418,10 @@
 
   <!-- Startup Initial Setup Modal (First Launch / Re-run Onboarding) -->
   <div class="modal-backdrop" id="onboardingModal">
-    <div class="modal modal-wide">
+    <div class="modal modal-wide modal-onb">
       <div>
         <div class="modal-title" data-i18n="onb_title">欢迎使用 WireDeck</div>
-        <div class="page-sub" data-i18n="onb_sub">先选好界面语言与要直连的设备预设，各预设配置相互独立（稍后可随时在设置中切换）</div>
+        <div class="page-sub" data-i18n="onb_sub">选择界面语言、连接方式与设备预设，各预设配置相互独立（稍后可随时切换）</div>
       </div>
 
       <div class="onb-section">
@@ -345,6 +431,14 @@
           <button type="button" class="lang-pill" data-onb-lang="zh-TW">繁體中文</button>
           <button type="button" class="lang-pill" data-onb-lang="en">English</button>
           <button type="button" class="lang-pill" data-onb-lang="ja">日本語</button>
+        </div>
+      </div>
+
+      <div class="onb-section">
+        <div class="onb-label" data-i18n="onb_transport">首选连接方式</div>
+        <div class="lang-pills lang-pills-2" id="onbTransportRow">
+          <button type="button" class="lang-pill active" data-onb-transport="wired" data-i18n="onb_transport_wired">有线直连（千兆网线）</button>
+          <button type="button" class="lang-pill" data-onb-transport="wireless" data-i18n="onb_transport_wireless">无线模式（5G 热点 / 同 Wi-Fi）</button>
         </div>
       </div>
 
@@ -359,7 +453,7 @@
     </div>
   </div>
 
-  <!-- Confirm Foreign NetNat / Reset NIC Modal -->
+  <!-- Confirm Modal -->
   <div class="modal-backdrop" id="confirmModal">
     <div class="modal">
       <div class="modal-title" id="confirmTitle" data-i18n="confirm_netnat_title">确认清理其他 NAT 规则</div>

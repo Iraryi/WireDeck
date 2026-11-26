@@ -84,6 +84,7 @@ class DiagnosticReport:
     headline: str
     primary_fault: FaultItem | None
     layers: list[LayerReport]
+    transport: str = "wired"
     snapshot: dict[str, Any] = field(default_factory=dict)
     extensions: list[dict[str, Any]] = field(default_factory=list)
 
@@ -92,6 +93,7 @@ class DiagnosticReport:
             "schema_version": self.schema_version,
             "app_version": self.app_version,
             "timestamp": self.timestamp,
+            "transport": self.transport,
             "console_profile": self.console_profile,
             "mode": self.mode,
             "can_enable_direct": self.can_enable_direct,

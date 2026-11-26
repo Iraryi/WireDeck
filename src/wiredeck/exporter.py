@@ -18,7 +18,7 @@ from wiredeck.toolkits import discover_toolkits
 from wiredeck.version import APP_VERSION, EXT_SCHEMA_VERSION, SCHEMA_VERSION
 
 SECRET_KEY_RE = re.compile(
-    r"(token|password|passwd|secret|api_?key|private_?key|secret_?key|credential|cookie|passphrase|bearer)",
+    r"(token|password|passwd|wifi_?password|secret|api_?key|private_?key|secret_?key|credential|cookie|passphrase|bearer)",
     re.IGNORECASE,
 )
 BEARER_VALUE_RE = re.compile(r"(Bearer\s+)[A-Za-z0-9._-]{12,}", re.IGNORECASE)
@@ -95,11 +95,14 @@ def build_dsh_handoff_prompt(
         if report.primary_fault
         else "无明显硬阻断（可结合诊断包深入排查）"
     )
+    is_wireless = getattr(report, "transport", "wired") == "wireless"
+    transport_label = "无线模式" if is_wireless else "有线直连"
+    diag_cmd = "`" + cli_hint + (" diagnose --transport wireless --json`" if is_wireless else " diagnose --json`")
     return (
-        "请帮我排查笔记本与游戏机有线直连问题（WireDeck 现场交接）：\n"
-        f"- 当前预设：{preset_id} | 状态：{report.mode} | 主断点：{fault_line}\n"
+        f"请帮我排查笔记本与游戏机{transport_label}问题（WireDeck 现场交接）：\n"
+        f"- 传输模式：{transport_label} | 当前预设：{preset_id} | 状态：{report.mode} | 主断点：{fault_line}\n"
         f"- 脱敏诊断包：{bundle_path}\n"
-        f"- CLI 接口：`{cli_hint} diagnose --json` / `apply <action> --json` / `toolkit run <id> --json`\n"
+        f"- CLI 接口：{diag_cmd} / `apply <action> --json` / `toolkit run <id> --json`\n"
         f"- 内置只读工具库（可直接调用）：{tool_ids}\n"
         f"- 热加载扩展目录：`{paths.extensions_dir}`（协议 `{EXT_SCHEMA_VERSION}`，写入 `ext.json` + `check.ps1` / `fix.ps1` 即可自动融入 WireDeck 主诊断界面）\n"
         "请先读取上述诊断包并按需调用内置工具库定位根因；若属于 WireDeck 尚未内置的问题，可直接往扩展目录写入检测/修复插件并验证。"

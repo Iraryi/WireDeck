@@ -165,8 +165,9 @@ def _build_parser() -> argparse.ArgumentParser:
 
     sub = parser.add_subparsers(dest="command")
 
-    p_diag = sub.add_parser("diagnose", help="Run 6-layer wired direct diagnosis")
+    p_diag = sub.add_parser("diagnose", help="Run 6-layer wired or wireless diagnosis")
     p_diag.add_argument("--json", action="store_true", dest="as_json", help="Output strict JSON")
+    p_diag.add_argument("--transport", choices=["wired", "wireless"], default="wired")
     p_diag.add_argument("--console", choices=sorted(set(ALL_PRESET_IDS) | set(PRESET_ALIASES.keys())), default=None)
     p_diag.add_argument("--no-extensions", action="store_true")
     p_diag.add_argument("--no-network", action="store_true")
@@ -238,14 +239,26 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "diagnose":
         if args.console:
             cfg.console_profile = args.console
-        report = run_diagnosis(
-            paths,
-            cfg,
-            include_extensions=not args.no_extensions,
-            probe_network=not args.no_network,
-            snapshot_fn=collect_system_snapshot,
-        )
-        lines = [f"{APP_NAME} v{APP_VERSION} | mode={report.mode} | {report.headline}"]
+        if getattr(args, "transport", "wired") == "wireless":
+            from wiredeck.wireless_diagnostics import run_wireless_diagnosis
+            from wiredeck.wireless_probes import collect_wireless_snapshot
+
+            report = run_wireless_diagnosis(
+                paths,
+                cfg,
+                include_extensions=not args.no_extensions,
+                probe_network=not args.no_network,
+                snapshot_fn=collect_wireless_snapshot,
+            )
+        else:
+            report = run_diagnosis(
+                paths,
+                cfg,
+                include_extensions=not args.no_extensions,
+                probe_network=not args.no_network,
+                snapshot_fn=collect_system_snapshot,
+            )
+        lines = [f"{APP_NAME} v{APP_VERSION} | transport={report.transport} | mode={report.mode} | {report.headline}"]
         for layer in report.layers:
             lines.append(f"  [{layer.layer} {layer.name}] {layer.status.value.upper():7s} {layer.summary}")
         _emit(report.to_dict(), args.as_json, "\n".join(lines))

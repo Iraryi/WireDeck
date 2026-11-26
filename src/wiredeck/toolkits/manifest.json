@@ -68,6 +68,50 @@
       "read_only": true
     },
     {
+      "id": "common/probe-wifi-rf-scan",
+      "scope": "common",
+      "script": "common/probe-wifi-rf-scan.ps1",
+      "name_zh": "周边 Wi-Fi 信道拥挤扫描",
+      "name_en": "Nearby Wi-Fi Channel Scan",
+      "description_zh": "统计周边 2.4G / 5G 信道 BSSID 分布，辅助挑选最干净的无线信道",
+      "description_en": "Count 2.4GHz and 5GHz BSSID occupancy per channel to find clean airspace",
+      "timeout_sec": 10,
+      "read_only": true
+    },
+    {
+      "id": "common/probe-hotspot-clients",
+      "scope": "common",
+      "script": "common/probe-hotspot-clients.ps1",
+      "name_zh": "5G 热点已连设备发现",
+      "name_en": "Mobile Hotspot Client Discovery",
+      "description_zh": "查询 Wi-Fi Direct 虚网卡状态与 192.168.137.0/24 在线设备 IP/MAC",
+      "description_en": "Inspect Wi-Fi Direct virtual adapter and 192.168.137.0/24 client IP/MAC table",
+      "timeout_sec": 8,
+      "read_only": true
+    },
+    {
+      "id": "common/bench-wifi-jitter",
+      "scope": "common",
+      "script": "common/bench-wifi-jitter.ps1",
+      "name_zh": "无线延迟抖动 20 包压测",
+      "name_en": "20-Packet Wi-Fi Jitter Test",
+      "description_zh": "向当前无线设备或网关连续发 20 包，统计最小/均值/P95/最大延迟与抖动",
+      "description_en": "Send 20 ICMP probes to peer/gateway and compute min/avg/p95/max RTT and jitter",
+      "timeout_sec": 16,
+      "read_only": true
+    },
+    {
+      "id": "common/probe-wifi-advanced",
+      "scope": "common",
+      "script": "common/probe-wifi-advanced.ps1",
+      "name_zh": "无线网卡高级节能属性快照",
+      "name_en": "Wi-Fi Adapter Power/Roaming Audit",
+      "description_zh": "读取无线网卡驱动版本、AutoConfig 扫描状态及 MIMO/漫游/合并全部参数",
+      "description_en": "Dump Wi-Fi driver version, AutoConfig status, and MIMO/roaming/coalescing flags",
+      "timeout_sec": 10,
+      "read_only": true
+    },
+    {
       "id": "xbox/check-xbox-endpoints",
       "scope": "xbox",
       "script": "xbox/check-xbox-endpoints.ps1",

@@ -40,6 +40,8 @@ from wiredeck.stream_client import (
 )
 from wiredeck.toolkits import discover_toolkits, run_toolkit
 from wiredeck.version import APP_NAME, APP_VERSION, NAT_NAME
+from wiredeck.wireless_diagnostics import classify_wireless_snapshot, run_wireless_diagnosis
+from wiredeck.wireless_probes import collect_wireless_snapshot, get_hotspot_credentials, measure_wifi_jitter
 
 
 def build_preview_report(preview_mode: str, preset_id: str = "xbox") -> DiagnosticReport:
@@ -165,6 +167,106 @@ def build_preview_report(preview_mode: str, preset_id: str = "xbox") -> Diagnost
     return classify_snapshot(base_snap, cfg)
 
 
+def build_wireless_preview_report(
+    preview_mode: str,
+    preset_id: str = "xbox",
+    submode: str = "hotspot",
+) -> DiagnosticReport:
+    """Build deterministic, zero-PII wireless reports for high-DPI screenshots and tests."""
+    is_lan = (submode == "lan") or (preview_mode == "wireless_lan")
+    cfg = AppConfig(
+        active_preset=preset_id,
+        active_transport="wireless",
+        wireless_submode="lan" if is_lan else "hotspot",
+        wireless_peer_ip="192.168.1.88" if is_lan else "",
+    )
+    snap: dict[str, Any] = {
+        "is_admin": False,
+        "wifi_adapters": [
+            {
+                "name": "WLAN",
+                "interface_description": "Intel(R) Wi-Fi 6 AX201 160MHz",
+                "interface_index": 11,
+                "status": "Up",
+                "link_speed_bps": 866_000_000,
+                "link_speed_text": "866 Mbps",
+                "pnp_device_id": "PCI\\VEN_8086&DEV_A0F0",
+                "advanced_properties": [],
+                "powersave_enabled": ["MIMOPowerSaveMode", "*PacketCoalescing"] if is_lan else [],
+            }
+        ],
+        "wlan": {
+            "name": "WLAN",
+            "description": "Intel(R) Wi-Fi 6 AX201 160MHz",
+            "state": "connected",
+            "connected": True,
+            "ssid": "Studio-5G",
+            "band": "5 GHz",
+            "band_ghz": 5.0,
+            "channel": 157,
+            "radio_type": "802.11ax",
+            "rx_rate_mbps": 866.0,
+            "tx_rate_mbps": 866.0,
+            "signal_pct": 84,
+            "rssi_dbm": -52,
+        },
+        "autoconfig_enabled": True if is_lan else False,
+        "ipv4_addresses": [{"interface_alias": "WLAN", "interface_index": 11, "ip": "192.168.1.105", "prefix_length": 24}],
+        "wifi_gateway_ip": "192.168.1.1",
+        "default_routes": [
+            {
+                "interface_alias": "WLAN",
+                "interface_index": 11,
+                "next_hop": "192.168.1.1",
+                "metric": 35,
+                "is_virtual_or_tun": False,
+                "interface_description": "Intel(R) Wi-Fi 6 AX201 160MHz",
+            }
+        ],
+        "wired_nat_active": False,
+        "hotspot": {
+            "supported": True,
+            "band_5ghz_supported": True,
+            "capability": "Enabled",
+            "state": "Off" if is_lan else "On",
+            "band": "FiveGigahertz" if not is_lan else "Auto",
+            "ssid": "WireDeck-5G",
+            "client_count": 0 if is_lan else 1,
+            "max_client_count": 8,
+            "virtual_adapter_name": "Microsoft Wi-Fi Direct Virtual Adapter",
+            "virtual_adapter_ip": "" if is_lan else "192.168.137.1",
+        },
+        "hotspot_clients": []
+        if is_lan
+        else [{"ip": "192.168.137.42", "mac": "00-11-22-33-44-55", "state": "Reachable", "interface_alias": "WLAN-Direct"}],
+        "uwp_exempt_packages": [],
+        "uwp_missing_packages": ["microsoft.windowsstore_8wekyb3d8bbwe"] if preview_mode == "wireless_wizard" else [],
+        "stream_clients": {
+            "xstreaming_path": "C:\\Program Files\\XStreaming\\XStreaming.exe",
+            "xbox_app_installed": True,
+            "chiaki_path": "C:\\Program Files\\chiaki-ng\\chiaki.exe",
+            "ps_remote_path": None,
+            "moonlight_path": "C:\\Program Files\\Moonlight Game Streaming\\Moonlight.exe",
+            "sunshine_path": None,
+            "steam_path": None,
+        },
+        "connectivity": {
+            "target_peer_ip": "192.168.1.88" if is_lan else "192.168.137.42",
+            "peer_reachable": False if preview_mode == "wireless_wizard" else True,
+            "peer_rtt_ms": None if preview_mode == "wireless_wizard" else (2.4 if is_lan else 1.8),
+            "jitter_ms": None if preview_mode == "wireless_wizard" else (1.4 if is_lan else 0.9),
+            "loss_pct": 0.0,
+            "gateway_ip": "192.168.1.1",
+            "gateway_reachable": True,
+            "host_internet_ok": True,
+            "xbox_live_ok": True,
+            "service_endpoint_ok": True,
+            "service_endpoint_status": 200,
+        },
+    }
+    return classify_wireless_snapshot(snap, cfg)
+
+
 class WireDeckApi:
     """Python API surface exposed to the WebView2 frontend via pywebview."""
 
@@ -173,18 +275,33 @@ class WireDeckApi:
         *,
         paths: AppPaths | None = None,
         snapshot_fn: Callable[..., dict[str, Any]] = collect_system_snapshot,
+        wireless_snapshot_fn: Callable[..., dict[str, Any]] = collect_wireless_snapshot,
         preview_state: str | None = None,
     ) -> None:
         self.paths = paths or resolve_app_paths()
         self.cfg = load_config(self.paths)
         self._snapshot_fn = snapshot_fn
+        self._wireless_snapshot_fn = wireless_snapshot_fn
         self._preview_state = preview_state
         self._last_report: DiagnosticReport | None = None
+        self._last_wireless_report: DiagnosticReport | None = None
         self._bridge: LocalBridgeServer | None = None
+        if preview_state in ("wireless", "wireless_wizard"):
+            self.cfg.active_transport = "wireless"
+            self.cfg.wireless_submode = "hotspot"
+        elif preview_state == "wireless_lan":
+            self.cfg.active_transport = "wireless"
+            self.cfg.wireless_submode = "lan"
+        elif preview_state in ("ready", "breakpoint", "wizard"):
+            self.cfg.active_transport = "wired"
 
     def _preview_view_name(self) -> str | None:
         if self._preview_state in ("wizard", "ai", "settings"):
             return self._preview_state
+        if self._preview_state in ("wireless", "wireless_lan"):
+            return "wireless"
+        if self._preview_state == "wireless_wizard":
+            return "wizard"
         return None
 
     def get_state(self) -> dict[str, Any]:
@@ -227,6 +344,59 @@ class WireDeckApi:
             )
         self._last_report = rep
         return rep.to_dict()
+
+    def diagnose_wireless(self) -> dict[str, Any]:
+        if self._preview_state:
+            rep = build_wireless_preview_report(
+                self._preview_state,
+                preset_id=self.cfg.active_preset,
+                submode=self.cfg.wireless_submode,
+            )
+        else:
+            rep = run_wireless_diagnosis(
+                self.paths,
+                self.cfg,
+                include_extensions=True,
+                probe_network=True,
+                snapshot_fn=self._wireless_snapshot_fn,
+            )
+        self._last_wireless_report = rep
+        return rep.to_dict()
+
+    def get_hotspot_credentials(self) -> dict[str, Any]:
+        if self._preview_state:
+            return {
+                "ok": True,
+                "ssid": "WireDeck-5G",
+                "passphrase": "88482026",
+                "band": "FiveGigahertz",
+                "state": "Off" if self._preview_state == "wireless_lan" else "On",
+                "client_count": 0 if self._preview_state == "wireless_lan" else 1,
+            }
+        return get_hotspot_credentials()
+
+    def set_transport(self, transport: str) -> dict[str, Any]:
+        if transport in ("wired", "wireless"):
+            self.cfg.active_transport = transport
+            save_config(self.paths, self.cfg)
+        return {"ok": True, "active_transport": self.cfg.active_transport, "config": self.cfg.to_dict()}
+
+    def set_wireless_submode(self, submode: str) -> dict[str, Any]:
+        if submode in ("hotspot", "lan"):
+            self.cfg.wireless_submode = submode
+            save_config(self.paths, self.cfg)
+        return {"ok": True, "wireless_submode": self.cfg.wireless_submode, "config": self.cfg.to_dict()}
+
+    def ping_wireless_peer_now(self, peer_ip: str = "") -> dict[str, Any]:
+        target = peer_ip.strip() or self.cfg.wireless_peer_ip
+        if not target and self._last_wireless_report:
+            target = str((self._last_wireless_report.snapshot.get("connectivity") or {}).get("target_peer_ip") or "")
+        if not target:
+            return {"ok": False, "code": "NO_PEER_IP", "target_ip": ""}
+        if self._preview_state:
+            return {"ok": True, "target_ip": target, "reachable": True, "avg_rtt_ms": 2.1, "jitter_ms": 0.9, "loss_pct": 0.0}
+        res = measure_wifi_jitter(target, count=6, timeout_ms=700)
+        return {"ok": bool(res.get("reachable")), **res}
 
     def _execute_or_elevate(self, action: str, opts: dict[str, Any]) -> ActionResult:
         force = bool(opts.get("force", False))
@@ -272,12 +442,14 @@ class WireDeckApi:
             return ActionResult(ok=True, code="PREVIEW_ONLY", message="预览模式下不修改本机网络").to_dict()
         return self._execute_or_elevate(action, opts or {}).to_dict()
 
-    def complete_onboarding(self, language: str, preset_id: str) -> dict[str, Any]:
-        """Save initial startup language + chosen preset and mark onboarding complete."""
-        from wiredeck.config import VALID_LANGUAGES
+    def complete_onboarding(self, language: str, preset_id: str, transport: str = "wired") -> dict[str, Any]:
+        """Save initial startup language, chosen transport & preset, and mark onboarding complete."""
+        from wiredeck.config import VALID_LANGUAGES, VALID_TRANSPORTS
 
         if language in VALID_LANGUAGES:
             self.cfg.language = language
+        if transport in VALID_TRANSPORTS:
+            self.cfg.active_transport = transport
         self.cfg.switch_preset(preset_id)
         self.cfg.onboarding_completed = True
         save_config(self.paths, self.cfg)
@@ -290,7 +462,7 @@ class WireDeckApi:
         return {"ok": True, "config": self.cfg.to_dict(), "active_preset": get_preset(self.cfg.active_preset).to_dict()}
 
     def save_settings(self, patch: dict[str, Any]) -> dict[str, Any]:
-        from wiredeck.config import VALID_LANGUAGES, VALID_THEMES
+        from wiredeck.config import VALID_LANGUAGES, VALID_THEMES, VALID_TRANSPORTS, VALID_WIRELESS_SUBMODES
 
         # Handle preset switch cleanly FIRST so we don't copy old preset IPs onto the newly chosen preset
         requested_preset = patch.get("active_preset", patch.get("console_profile"))
@@ -301,6 +473,21 @@ class WireDeckApi:
         if patch.get("language") in VALID_LANGUAGES:
             self.cfg.language = str(patch["language"])
         lang = self.cfg.language
+
+        if "wireless_peer_ip" in patch:
+            w_in = str(patch["wireless_peer_ip"] or "").strip()
+            if w_in:
+                try:
+                    ipaddress.IPv4Address(w_in)
+                except ValueError:
+                    err_w = {
+                        "zh-CN": "无线设备 IPv4 格式无效",
+                        "zh-TW": "無線裝置 IPv4 格式無效",
+                        "ja": "無線デバイス IPv4 の形式が無効です",
+                        "en": "Invalid wireless device IPv4 format",
+                    }
+                    return {"ok": False, "code": "INVALID_IP", "message": err_w.get(lang, err_w["en"])}
+            self.cfg.wireless_peer_ip = w_in
 
         # Validate IP inputs strictly when provided (or for current active preset)
         host_in = str(patch.get("host_ip", self.cfg.host_ip)).strip()
@@ -348,10 +535,18 @@ class WireDeckApi:
 
         if patch.get("theme") in VALID_THEMES:
             self.cfg.theme = str(patch["theme"])
+        if patch.get("active_transport") in VALID_TRANSPORTS:
+            self.cfg.active_transport = str(patch["active_transport"])
+        if patch.get("wireless_submode") in VALID_WIRELESS_SUBMODES:
+            self.cfg.wireless_submode = str(patch["wireless_submode"])
         if "ethernet_interface" in patch:
             self.cfg.ethernet_interface = str(patch["ethernet_interface"] or "")
         if "uplink_interface" in patch:
             self.cfg.uplink_interface = str(patch["uplink_interface"] or "")
+        if "wifi_interface" in patch:
+            self.cfg.wifi_interface = str(patch["wifi_interface"] or "")
+        if "hotspot_prefer_5ghz" in patch:
+            self.cfg.hotspot_prefer_5ghz = bool(patch["hotspot_prefer_5ghz"])
         if "onboarding_completed" in patch:
             self.cfg.onboarding_completed = bool(patch["onboarding_completed"])
 
@@ -387,11 +582,24 @@ class WireDeckApi:
         return {"ok": reachable, "peer_ip": self.cfg.peer_ip, "rtt_ms": rtt_ms}
 
     def export_for_ai(self) -> dict[str, Any]:
-        report = self._last_report or (
-            build_preview_report(self._preview_state, preset_id=self.cfg.active_preset)
-            if self._preview_state
-            else run_diagnosis(self.paths, self.cfg, include_extensions=True, probe_network=True, snapshot_fn=self._snapshot_fn)
-        )
+        if self.cfg.active_transport == "wireless":
+            report = self._last_wireless_report or (
+                build_wireless_preview_report(self._preview_state or "wireless", preset_id=self.cfg.active_preset, submode=self.cfg.wireless_submode)
+                if self._preview_state
+                else run_wireless_diagnosis(
+                    self.paths,
+                    self.cfg,
+                    include_extensions=True,
+                    probe_network=True,
+                    snapshot_fn=self._wireless_snapshot_fn,
+                )
+            )
+        else:
+            report = self._last_report or (
+                build_preview_report(self._preview_state, preset_id=self.cfg.active_preset)
+                if self._preview_state
+                else run_diagnosis(self.paths, self.cfg, include_extensions=True, probe_network=True, snapshot_fn=self._snapshot_fn)
+            )
         bundle_path, prompt = export_diagnostic_bundle(self.paths, report, self.cfg)
         return {"ok": True, "bundle_path": str(bundle_path), "prompt": prompt}
 
@@ -487,6 +695,9 @@ class WireDeckApi:
                     paths=self.paths,
                     diagnose_fn=lambda: run_diagnosis(
                         self.paths, self.cfg, include_extensions=True, probe_network=True, snapshot_fn=self._snapshot_fn
+                    ),
+                    diagnose_wireless_fn=lambda: run_wireless_diagnosis(
+                        self.paths, self.cfg, include_extensions=True, probe_network=True, snapshot_fn=self._wireless_snapshot_fn
                     ),
                     execute_action_fn=self._execute_or_elevate,
                 )
@@ -674,7 +885,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="WireDeck", add_help=True)
     parser.add_argument(
         "--preview-state",
-        choices=["ready", "breakpoint", "wizard", "ai", "settings", "onboarding"],
+        choices=["ready", "breakpoint", "wizard", "ai", "settings", "onboarding", "wireless", "wireless_lan", "wireless_wizard"],
         default=None,
         help="Open GUI in deterministic read-only preview mode",
     )
@@ -728,6 +939,11 @@ def main(argv: list[str] | None = None) -> int:
     import webview
 
     api = WireDeckApi(preview_state=args.preview_state)
+    if args.preview_state in ("wireless", "wireless_lan", "wireless_wizard"):
+        api.cfg.active_transport = "wireless"
+        api.cfg.wireless_submode = "lan" if args.preview_state == "wireless_lan" else "hotspot"
+    elif args.preview_state in ("ready", "breakpoint", "wizard"):
+        api.cfg.active_transport = "wired"
     if args.preset:
         api.cfg.switch_preset(args.preset)
     if args.theme:

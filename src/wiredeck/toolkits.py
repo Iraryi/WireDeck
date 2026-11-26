@@ -154,12 +154,15 @@ def run_toolkit(
 
     env = {
         "WIREDECK_ACTIVE_PRESET": active_cfg.active_preset,
+        "WIREDECK_TRANSPORT": active_cfg.active_transport,
         "WIREDECK_HOST_IP": active_cfg.host_ip,
         "WIREDECK_PEER_IP": active_cfg.peer_ip,
         "WIREDECK_SUBNET_CIDR": active_cfg.subnet_cidr,
         "WIREDECK_SUBNET_MASK": active_cfg.subnet_mask,
         "WIREDECK_DNS_SERVERS": ",".join(active_cfg.dns_servers),
         "WIREDECK_ETH_INTERFACE": active_cfg.ethernet_interface,
+        "WIREDECK_WIFI_INTERFACE": active_cfg.wifi_interface,
+        "WIREDECK_WIRELESS_PEER_IP": active_cfg.wireless_peer_ip,
     }
     t0 = time.perf_counter()
     ps_res = run_ps_file(script_path, timeout=tool.timeout_sec, extra_env=env, cwd=script_path.parent)

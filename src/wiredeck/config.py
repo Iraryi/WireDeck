@@ -17,6 +17,8 @@ from wiredeck.presets import ALL_PRESET_IDS, get_preset, normalize_preset_id
 VALID_PROFILES = ALL_PRESET_IDS
 VALID_LANGUAGES = ("zh-CN", "zh-TW", "en", "ja")
 VALID_THEMES = ("light", "dark")
+VALID_TRANSPORTS = ("wired", "wireless")
+VALID_WIRELESS_SUBMODES = ("hotspot", "lan")
 
 
 @dataclass
@@ -24,6 +26,7 @@ class PresetSettings:
     host_ip: str = "192.168.50.2"
     prefix_length: int = 24
     peer_ip: str = "192.168.50.1"
+    wireless_peer_ip: str = ""
     dns_servers: list[str] = field(default_factory=lambda: ["223.5.5.5", "8.8.8.8"])
     wizard_completed: bool = False
     preferred_client: str = "auto"
@@ -39,6 +42,7 @@ def default_preset_settings(preset_id: str) -> PresetSettings:
         host_ip=p.default_host_ip,
         prefix_length=p.default_prefix_length,
         peer_ip=p.default_peer_ip,
+        wireless_peer_ip="",
         dns_servers=list(p.default_dns_servers),
         wizard_completed=False,
         preferred_client="auto",
@@ -60,8 +64,12 @@ class AppConfig:
         theme: str = "light",
         active_preset: str | None = None,
         console_profile: str | None = None,
+        active_transport: str = "wired",
+        wireless_submode: str = "hotspot",
         ethernet_interface: str = "",
         uplink_interface: str = "",
+        wifi_interface: str = "",
+        hotspot_prefer_5ghz: bool = True,
         http_bridge_enabled: bool = False,
         onboarding_completed: bool = False,
         presets: dict[str, PresetSettings] | None = None,
@@ -69,6 +77,7 @@ class AppConfig:
         host_ip: str | None = None,
         prefix_length: int | None = None,
         peer_ip: str | None = None,
+        wireless_peer_ip: str | None = None,
         dns_servers: list[str] | None = None,
         wizard_completed: bool | None = None,
     ) -> None:
@@ -76,8 +85,12 @@ class AppConfig:
         self.theme = theme if theme in VALID_THEMES else "light"
         chosen = active_preset if active_preset is not None else (console_profile or "xbox")
         self.active_preset = normalize_preset_id(chosen)
+        self.active_transport = active_transport if active_transport in VALID_TRANSPORTS else "wired"
+        self.wireless_submode = wireless_submode if wireless_submode in VALID_WIRELESS_SUBMODES else "hotspot"
         self.ethernet_interface = ethernet_interface
         self.uplink_interface = uplink_interface
+        self.wifi_interface = wifi_interface
+        self.hotspot_prefer_5ghz = bool(hotspot_prefer_5ghz)
         self.http_bridge_enabled = bool(http_bridge_enabled)
         self.onboarding_completed = bool(onboarding_completed)
 
@@ -95,6 +108,8 @@ class AppConfig:
             active.prefix_length = _valid_prefix(prefix_length, active.prefix_length)
         if peer_ip is not None:
             active.peer_ip = _valid_ipv4(peer_ip, active.peer_ip)
+        if wireless_peer_ip is not None:
+            active.wireless_peer_ip = _valid_optional_ipv4(wireless_peer_ip, active.wireless_peer_ip)
         if dns_servers is not None:
             active.dns_servers = _valid_dns_list(dns_servers, active.dns_servers)
         if wizard_completed is not None:
@@ -146,6 +161,16 @@ class AppConfig:
         self.current_preset_settings.peer_ip = _valid_ipv4(value, self.current_preset_settings.peer_ip)
 
     @property
+    def wireless_peer_ip(self) -> str:
+        return self.current_preset_settings.wireless_peer_ip
+
+    @wireless_peer_ip.setter
+    def wireless_peer_ip(self, value: str) -> None:
+        self.current_preset_settings.wireless_peer_ip = _valid_optional_ipv4(
+            value, self.current_preset_settings.wireless_peer_ip
+        )
+
+    @property
     def dns_servers(self) -> list[str]:
         return self.current_preset_settings.dns_servers
 
@@ -179,14 +204,19 @@ class AppConfig:
             "theme": self.theme,
             "active_preset": self.active_preset,
             "console_profile": self.active_preset,
+            "active_transport": self.active_transport,
+            "wireless_submode": self.wireless_submode,
             "ethernet_interface": self.ethernet_interface,
             "uplink_interface": self.uplink_interface,
+            "wifi_interface": self.wifi_interface,
+            "hotspot_prefer_5ghz": self.hotspot_prefer_5ghz,
             "http_bridge_enabled": self.http_bridge_enabled,
             "onboarding_completed": self.onboarding_completed,
             # Flattened active-preset convenience fields for GUI/CLI/exporter consumers
             "host_ip": self.host_ip,
             "prefix_length": self.prefix_length,
             "peer_ip": self.peer_ip,
+            "wireless_peer_ip": self.wireless_peer_ip,
             "dns_servers": list(self.dns_servers),
             "wizard_completed": self.wizard_completed,
             "subnet_cidr": self.subnet_cidr,
@@ -202,6 +232,19 @@ def _valid_ipv4(value: Any, default: str) -> str:
     try:
         ipaddress.IPv4Address(value.strip())
         return value.strip()
+    except ValueError:
+        return default
+
+
+def _valid_optional_ipv4(value: Any, default: str) -> str:
+    if not isinstance(value, str):
+        return default
+    stripped = value.strip()
+    if stripped == "":
+        return ""
+    try:
+        ipaddress.IPv4Address(stripped)
+        return stripped
     except ValueError:
         return default
 
@@ -235,6 +278,7 @@ def _normalize_preset_settings(preset_id: str, raw: Any) -> PresetSettings:
         host_ip=_valid_ipv4(raw.get("host_ip"), base.host_ip),
         prefix_length=_valid_prefix(raw.get("prefix_length"), base.prefix_length),
         peer_ip=_valid_ipv4(raw.get("peer_ip"), base.peer_ip),
+        wireless_peer_ip=_valid_optional_ipv4(raw.get("wireless_peer_ip"), base.wireless_peer_ip),
         dns_servers=_valid_dns_list(raw.get("dns_servers"), base.dns_servers),
         wizard_completed=bool(raw.get("wizard_completed", base.wizard_completed)),
         preferred_client=str(raw.get("preferred_client", "auto")) if isinstance(raw.get("preferred_client"), str) else "auto",
@@ -254,6 +298,12 @@ def _normalize_config(raw: dict[str, Any]) -> AppConfig:
     raw_preset = raw.get("active_preset", raw.get("console_profile", "xbox"))
     active_preset = normalize_preset_id(raw_preset)
 
+    raw_transport = raw.get("active_transport", "wired")
+    active_transport = raw_transport if raw_transport in VALID_TRANSPORTS else "wired"
+
+    raw_submode = raw.get("wireless_submode", "hotspot")
+    wireless_submode = raw_submode if raw_submode in VALID_WIRELESS_SUBMODES else "hotspot"
+
     presets_map = _default_presets_map()
     raw_presets = raw.get("presets")
     if isinstance(raw_presets, dict):
@@ -269,6 +319,8 @@ def _normalize_config(raw: dict[str, Any]) -> AppConfig:
         active_ps.prefix_length = _valid_prefix(raw.get("prefix_length"), active_ps.prefix_length)
     if "peer_ip" in raw:
         active_ps.peer_ip = _valid_ipv4(raw.get("peer_ip"), active_ps.peer_ip)
+    if "wireless_peer_ip" in raw:
+        active_ps.wireless_peer_ip = _valid_optional_ipv4(raw.get("wireless_peer_ip"), active_ps.wireless_peer_ip)
     if "dns_servers" in raw:
         active_ps.dns_servers = _valid_dns_list(raw.get("dns_servers"), active_ps.dns_servers)
     if "wizard_completed" in raw:
@@ -276,13 +328,18 @@ def _normalize_config(raw: dict[str, Any]) -> AppConfig:
 
     eth = raw.get("ethernet_interface", "")
     uplink = raw.get("uplink_interface", "")
+    wifi = raw.get("wifi_interface", "")
 
     return AppConfig(
         language=language,
         theme=theme,
         active_preset=active_preset,
+        active_transport=active_transport,
+        wireless_submode=wireless_submode,
         ethernet_interface=str(eth) if isinstance(eth, str) else "",
         uplink_interface=str(uplink) if isinstance(uplink, str) else "",
+        wifi_interface=str(wifi) if isinstance(wifi, str) else "",
+        hotspot_prefer_5ghz=bool(raw.get("hotspot_prefer_5ghz", True)),
         http_bridge_enabled=bool(raw.get("http_bridge_enabled", False)),
         onboarding_completed=bool(raw.get("onboarding_completed", False)),
         presets=presets_map,
@@ -318,8 +375,12 @@ def save_config(paths: AppPaths, cfg: AppConfig) -> None:
         "language": cfg.language,
         "theme": cfg.theme,
         "active_preset": cfg.active_preset,
+        "active_transport": cfg.active_transport,
+        "wireless_submode": cfg.wireless_submode,
         "ethernet_interface": cfg.ethernet_interface,
         "uplink_interface": cfg.uplink_interface,
+        "wifi_interface": cfg.wifi_interface,
+        "hotspot_prefer_5ghz": cfg.hotspot_prefer_5ghz,
         "http_bridge_enabled": cfg.http_bridge_enabled,
         "onboarding_completed": cfg.onboarding_completed,
         "presets": {pid: cfg.presets[pid].to_dict() for pid in ALL_PRESET_IDS},

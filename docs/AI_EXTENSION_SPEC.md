@@ -11,7 +11,7 @@ Packaged alongside `WireDeck.exe` (subsystem `WINDOWS_CUI`, UTF-8 stdout, option
 ### Commands
 
 ```powershell
-wiredeck-cli.exe diagnose [--json] [--console xbox|playstation|switch|handheld|other] [--no-extensions] [--no-network]
+wiredeck-cli.exe diagnose [--transport wired|wireless] [--json] [--console xbox|playstation|switch|handheld|other] [--no-extensions] [--no-network]
 wiredeck-cli.exe status [--json] [--check-nat-active]
 wiredeck-cli.exe apply <action> [--id <ext_id>] [--force] [--elevate] [--json]
 wiredeck-cli.exe export-bundle [--out <path>] [--json]
@@ -35,6 +35,10 @@ wiredeck-cli.exe toolkit run <tool_id> [--json]
 | `fix-uwp` | Add AppContainer loopback exemptions for 17 core Microsoft Store / Xbox / Auth UWP packages | Idempotent `CheckNetIsolation.exe` calls |
 | `clear-ics` | Disable `HNetCfg.HNetShare` ICS flags; stop `SharedAccess` only if ICS/UDP 53/67 active | Never kills third-party non-ICS DNS processes (SmartDNS / AdGuard) |
 | `clear-netnat` | Remove non-`WireDeckNat` Windows `NetNat` entries | Refuses without `--force` (exit `2`, `CONFIRM_REQUIRED`) |
+| `enable-hotspot` | Lock Windows 10/11 Mobile Hotspot to 5 GHz (when supported) and start tethering | Blocked (exit `2`, `WIRED_NAT_CONFLICT`) if wired `WireDeckNat` is active without `--force` |
+| `disable-hotspot` | Stop Windows Mobile Hotspot cleanly | No-op if already off |
+| `optimize-wifi` | Snapshot adapter properties to `wifi_backup.json`, disable `MIMOPowerSaveMode` / `*PacketCoalescing` / aggressive roaming, pause background AutoConfig scan | NEVER disables AutoConfig scan when Wi-Fi is disconnected |
+| `restore-wifi` | Re-enable WLAN AutoConfig scanning and restore backed-up adapter properties | Handles missing/corrupt `wifi_backup.json` cleanly |
 | `run-ext` | Run `<ext_id>`'s `fix_script` | Path-traversal guarded, timeout clamped `1..15s` |
 
 ### Stable Exit Codes
@@ -111,7 +115,7 @@ When enabled manually from **AI 接口 (AI Port)** in the GUI:
 - Binds strictly to `127.0.0.1:<ephemeral_port>` with a 32-byte random Bearer token written to `<data_dir>\runtime\bridge.json`.
 - Endpoints (all require `Authorization: Bearer <token>`):
   - `GET /api/v1/health`
-  - `GET /api/v1/diagnose`
+  - `GET /api/v1/diagnose` (pass `?transport=wireless` for Wireless 6-layer report)
   - `GET /api/v1/extensions`
   - `GET /api/v1/toolkits` — lists bundled read-only toolkits (optional `?all=1` or `?preset=<id>`)
   - `POST /api/v1/toolkits/run` — body `{"tool_id": "<scope/name>"}`, executes read-only bundled probe immediately without elevating
@@ -123,7 +127,7 @@ When enabled manually from **AI 接口 (AI Port)** in the GUI:
 
 ## 4. Bundled Universal & Per-Preset Toolkits (`wiredeck-toolkits/v1`)
 
-WireDeck ships **16 read-only PowerShell toolkits** (universal host probes under `common/` plus tailored scripts under each preset) callable from the GUI **AI 接口** panel, HTTP Bridge `/api/v1/toolkits`, and `wiredeck-cli.exe toolkit run <tool_id> --json`.
+WireDeck ships **20 read-only PowerShell toolkits** (universal wired & wireless probes under `common/` plus tailored scripts under each preset) callable from the GUI **AI 接口** panel, HTTP Bridge `/api/v1/toolkits`, and `wiredeck-cli.exe toolkit run <tool_id> --json`.
 
 | Tool ID | Scope | Purpose |
 | :--- | :--- | :--- |
@@ -133,6 +137,10 @@ WireDeck ships **16 read-only PowerShell toolkits** (universal host probes under
 | `common/probe-mtu-path` | Universal | DF-ping upstream path MTU probe |
 | `common/probe-winnat-firewall` | Universal | Inspect `NetNat` entries, IPv4 forwarding, and WireDeck firewall rules |
 | `common/bench-peer-jitter` | Universal | 8-packet direct RTT & jitter check to current preset `peer_ip` |
+| `common/probe-wifi-rf-scan` | Universal | Count nearby 2.4 GHz / 5 GHz BSSID channel occupancy |
+| `common/probe-hotspot-clients` | Universal | Inspect Wi-Fi Direct virtual adapter & `192.168.137.0/24` connected clients |
+| `common/bench-wifi-jitter` | Universal | 20-packet Wi-Fi RTT min/avg/p95/max/jitter/loss test |
+| `common/probe-wifi-advanced` | Universal | Dump Wi-Fi driver version, AutoConfig status & MIMO/roaming/coalescing flags |
 | `xbox/check-xbox-endpoints` | `xbox` | DNS + HTTPS latency for Xbox Live / XSTS / Store endpoints |
 | `xbox/audit-uwp-loopback` | `xbox` | Verify AppContainer loopback exemptions for Store / Xbox packages |
 | `xbox/check-xbox-ports` | `xbox` | Inspect local listeners on Xbox ports (UDP 3074 / 5050 / 9002) |

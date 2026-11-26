@@ -481,7 +481,23 @@ def collect_system_snapshot(
     ps_script = _BATCH_PROBE_PS.replace("__FW_NAT__", FW_RULE_NAT).replace(
         "__FW_DIRECT__", FW_RULE_DIRECT
     )
-    ps_res = runner(ps_script, 15)
+
+    # Run PowerShell probe and network connectivity probes concurrently to cut cold-start latency
+    if probe_network:
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            f_ps = pool.submit(runner, ps_script, 15)
+            f_net = pool.submit(network_probe_fn, cfg)
+            ps_res = f_ps.result()
+            connectivity = f_net.result()
+    else:
+        ps_res = runner(ps_script, 15)
+        connectivity = {
+            "peer_reachable": None,
+            "peer_rtt_ms": None,
+            "host_internet_ok": None,
+            "xbox_live_ok": None,
+            "xbox_live_status": None,
+        }
 
     parsed: dict[str, Any] = {}
     if ps_res.stdout.strip():
@@ -501,18 +517,6 @@ def collect_system_snapshot(
     installed_core = [str(p).lower() for p in (parsed.get("uwp_installed_core") or [])]
     target_core = [p for p in CORE_UWP_FAMILIES if p in installed_core] if installed_core else []
     missing_uwp = [p for p in target_core if p not in exempt_packages]
-
-    connectivity = (
-        network_probe_fn(cfg)
-        if probe_network
-        else {
-            "peer_reachable": None,
-            "peer_rtt_ms": None,
-            "host_internet_ok": None,
-            "xbox_live_ok": None,
-            "xbox_live_status": None,
-        }
-    )
 
     return {
         "os_version": parsed.get("os_version", ""),

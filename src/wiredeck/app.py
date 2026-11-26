@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import ctypes
+import ipaddress
 import json
 import os
 import subprocess
@@ -29,7 +30,7 @@ from wiredeck.paths import (
     get_web_dir,
     resolve_app_paths,
 )
-from wiredeck.probes import collect_system_snapshot
+from wiredeck.probes import _ping_peer, collect_system_snapshot
 from wiredeck.ps_runner import is_admin, run_elevated_worker, run_powershell
 from wiredeck.stream_client import (
     download_and_verify_asset,
@@ -165,10 +166,8 @@ class WireDeckApi:
         self._bridge: LocalBridgeServer | None = None
 
     def _preview_view_name(self) -> str | None:
-        if self._preview_state == "wizard":
-            return "wizard"
-        if self._preview_state == "ai":
-            return "ai"
+        if self._preview_state in ("wizard", "ai", "settings"):
+            return self._preview_state
         return None
 
     def get_state(self) -> dict[str, Any]:
@@ -248,6 +247,38 @@ class WireDeckApi:
         return self._execute_or_elevate(action, opts or {}).to_dict()
 
     def save_settings(self, patch: dict[str, Any]) -> dict[str, Any]:
+        # Validate IP inputs strictly before saving so users get immediate actionable errors
+        host_in = str(patch.get("host_ip", self.cfg.host_ip)).strip()
+        peer_in = str(patch.get("peer_ip", self.cfg.peer_ip)).strip()
+        try:
+            host_addr = ipaddress.IPv4Address(host_in)
+            peer_addr = ipaddress.IPv4Address(peer_in)
+        except ValueError:
+            return {
+                "ok": False,
+                "code": "INVALID_IP",
+                "message": "IPv4 地址格式无效（示例：192.168.50.2）"
+                if self.cfg.language == "zh-CN"
+                else "Invalid IPv4 address format (e.g. 192.168.50.2)",
+            }
+        if host_addr == peer_addr:
+            return {
+                "ok": False,
+                "code": "SAME_IP",
+                "message": "电脑有线 IP 与游戏机 IP 不能相同"
+                if self.cfg.language == "zh-CN"
+                else "Host IP and Console IP cannot be identical",
+            }
+        net_host = ipaddress.IPv4Interface(f"{host_addr}/{self.cfg.prefix_length}").network
+        if peer_addr not in net_host:
+            return {
+                "ok": False,
+                "code": "SUBNET_MISMATCH",
+                "message": f"游戏机 IP 必须与电脑在同网段（{net_host}）"
+                if self.cfg.language == "zh-CN"
+                else f"Console IP must be in the same subnet ({net_host})",
+            }
+
         merged = self.cfg.to_dict()
         for k in ("theme", "language", "console_profile", "ethernet_interface", "uplink_interface", "host_ip", "peer_ip"):
             if k in patch:
@@ -258,6 +289,13 @@ class WireDeckApi:
         save_config(self.paths, self.cfg)
         _set_titlebar_theme(f"{APP_NAME} v{APP_VERSION}", self.cfg.theme == "dark")
         return {"ok": True, "config": self.cfg.to_dict()}
+
+    def ping_peer_now(self) -> dict[str, Any]:
+        """Fast <1s direct peer ping for Step 4 connectivity verification."""
+        if self._preview_state:
+            return {"ok": True, "peer_ip": self.cfg.peer_ip, "rtt_ms": 0.4}
+        reachable, rtt_ms = _ping_peer(self.cfg.peer_ip, timeout_ms=800)
+        return {"ok": reachable, "peer_ip": self.cfg.peer_ip, "rtt_ms": rtt_ms}
 
     def export_for_ai(self) -> dict[str, Any]:
         report = self._last_report or (
@@ -509,11 +547,35 @@ def _capture_window_screenshot(title_prefix: str, out_path: Path, delay_sec: flo
         pass
 
 
+def _acquire_single_instance_mutex(window_title: str) -> int | None:
+    """Prevent duplicate WireDeck GUI windows; focus existing window if already running."""
+    if os.name != "nt":
+        return None
+    ERROR_ALREADY_EXISTS = 183
+    SW_RESTORE = 9
+    try:
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        handle = kernel32.CreateMutexW(None, False, "Local\\WireDeck_SingleInstance_v1")
+        if not handle:
+            return None
+        if ctypes.get_last_error() == ERROR_ALREADY_EXISTS:
+            user32 = ctypes.windll.user32
+            hwnd = user32.FindWindowW(None, window_title)
+            if hwnd:
+                user32.ShowWindow(hwnd, SW_RESTORE)
+                user32.SetForegroundWindow(hwnd)
+            kernel32.CloseHandle(handle)
+            return -1
+        return int(handle)
+    except Exception:
+        return None
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="WireDeck", add_help=True)
     parser.add_argument(
         "--preview-state",
-        choices=["ready", "breakpoint", "wizard", "ai"],
+        choices=["ready", "breakpoint", "wizard", "ai", "settings"],
         default=None,
         help="Open GUI in deterministic read-only preview mode",
     )
@@ -524,11 +586,30 @@ def main(argv: list[str] | None = None) -> int:
         help="Override theme in preview mode",
     )
     parser.add_argument(
+        "--lang",
+        choices=["zh-CN", "en"],
+        default=None,
+        help="Override language in preview mode",
+    )
+    parser.add_argument(
         "--capture-to",
         default=None,
         help="Optional PNG output path; captures window screenshot and exits cleanly",
     )
+    parser.add_argument(
+        "--capture-delay",
+        type=float,
+        default=2.0,
+        help="Seconds to wait before capturing screenshot",
+    )
     args = parser.parse_args(argv)
+
+    title = f"{APP_NAME} v{APP_VERSION}"
+    mutex_handle: int | None = None
+    if not args.preview_state and not args.capture_to:
+        mutex_handle = _acquire_single_instance_mutex(title)
+        if mutex_handle == -1:
+            return 0
 
     # Enable crisp per-monitor DPI awareness on Windows
     if os.name == "nt":
@@ -545,9 +626,10 @@ def main(argv: list[str] | None = None) -> int:
     api = WireDeckApi(preview_state=args.preview_state)
     if args.theme:
         api.cfg.theme = args.theme
+    if args.lang:
+        api.cfg.language = args.lang
     web_dir = get_web_dir()
     index_url = (web_dir / "index.html").resolve().as_uri()
-    title = f"{APP_NAME} v{APP_VERSION}"
     bg_hex = "#202020" if api.cfg.theme == "dark" else "#f3f3f3"
 
     window = webview.create_window(
@@ -565,7 +647,7 @@ def main(argv: list[str] | None = None) -> int:
         _set_titlebar_theme(title, api.cfg.theme == "dark")
         if args.capture_to:
             out_p = Path(args.capture_to)
-            _capture_window_screenshot(title, out_p, delay_sec=2.0)
+            _capture_window_screenshot(title, out_p, delay_sec=max(0.5, args.capture_delay))
             try:
                 window.destroy()
             except Exception:
@@ -573,6 +655,11 @@ def main(argv: list[str] | None = None) -> int:
 
     def _on_closed() -> None:
         api.shutdown()
+        if mutex_handle and mutex_handle > 0 and os.name == "nt":
+            try:
+                ctypes.windll.kernel32.CloseHandle(mutex_handle)
+            except Exception:
+                pass
 
     window.events.closed += _on_closed
     icon_file = get_assets_dir() / "wiredeck.ico"

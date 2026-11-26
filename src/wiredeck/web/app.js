@@ -73,31 +73,120 @@
     return window.pywebview && window.pywebview.api;
   }
 
+  const EN_FAULTS = {
+    NIC_NOT_FOUND: ["Wired NIC Not Found", "Check Ethernet hardware or plug in a USB wired adapter"],
+    NIC_PCIE_PARENT_DISABLED: ["PCIe Port Disabled", "Parent PCIe root port is disabled; click Fix Now to wake it"],
+    NIC_DISABLED: ["Wired NIC Disabled", "Wired adapter is disabled; click Fix Now to enable it"],
+    NIC_POWERSAVE_ENABLED: ["NIC Power-Save On", "EEE/Green Ethernet can cause stream stutter; click Fix Now"],
+    CABLE_UNPLUGGED: ["Cable Unplugged", "Plug Ethernet cable firmly into laptop and powered-on console"],
+    LINK_DEGRADED_100M: ["100 Mbps Link", "Negotiated 100 Mbps; use a Cat5e/Cat6 Gigabit cable"],
+    NIC_HW_ERRORS: ["Cable Packet Errors", "High hardware packet errors; reseat or replace Ethernet cable"],
+    VPN_TUN_ACTIVE: ["VPN Taking Over Route", "Disconnect your VPN first, then click Enable Direct"],
+    ICS_ACTIVE: ["Windows ICS Active", "Windows ICS conflicts with TUN/WinNAT; click Fix Now to clear"],
+    PORT_53_67_OCCUPIED: ["UDP 53/67 In Use", "ICS/DHCP port conflict; clear ICS or stop conflicting service"],
+    PORT_53_NON_ICS_WARNING: ["Local DNS on UDP 53", "Third-party local DNS uses port 53 (does not block Direct)"],
+    FOREIGN_NETNAT_EXISTS: ["Other NetNat Found", "Another NetNat exists; confirm clearing before enabling Direct"],
+    ETH_IP_MISSING: ["Wired Static IP Missing", "Static host IP missing; click Fix Now to reapply"],
+    ETH_HAS_UNEXPECTED_GATEWAY: ["Unexpected Gateway", "Wired NIC should not hold a default gateway; reapply Direct"],
+    FORWARDING_DISABLED: ["IP Forwarding Off", "IPv4 forwarding is disabled; click Fix Now to reapply"],
+    FW_RULE_MISSING: ["Firewall Rule Missing", "WireDeck subnet firewall rule missing; click Fix Now"],
+    PEER_UNREACHABLE: ["Console Unreachable", "Power on console and apply the static IP in First Setup"],
+    HOST_INTERNET_DOWN: ["No Internet on Laptop", "Check your Wi-Fi or hotspot internet connection"],
+    XBOX_LIVE_UNREACHABLE: ["Xbox Live Unreachable", "Xbox auth endpoint did not respond; retry or check network"],
+    UWP_LOOPBACK_MISSING: ["UWP Loopback Blocked", "Exempt Store & Xbox apps so proxies do not block login"],
+    STREAM_CLIENT_MISSING: ["No Stream Client", "Download verified XStreaming or install Xbox App in First Setup"],
+  };
+
+  function localizeFault(f) {
+    if (!f) return null;
+    if (state.lang !== "en" || f.source === "extension") {
+      return { title: f.title || f.code, message: f.message || "" };
+    }
+    const pair = EN_FAULTS[f.code];
+    if (pair) return { title: pair[0], message: pair[1] };
+    return { title: f.title || f.code, message: f.message || "" };
+  }
+
+  function localizeHeadline(report) {
+    if (state.lang !== "en") return report.headline || "";
+    if (report.primary_fault) {
+      const lf = localizeFault(report.primary_fault);
+      return `Issue Detected: ${lf.title}`;
+    }
+    if (report.mode === "direct") return "Gigabit Direct Active — Ready to Play";
+    return "Ready — Click Enable Direct to Play";
+  }
+
+  function setBusy(busy) {
+    state.busy = busy;
+    const prog = document.getElementById("homeProgress");
+    if (prog) prog.classList.toggle("active", busy);
+    const btnRef = document.getElementById("btnRefresh");
+    const btnEn = document.getElementById("btnEnableDirect");
+    const btnDis = document.getElementById("btnDisableDirect");
+    if (btnRef) btnRef.disabled = busy;
+    if (btnDis) btnDis.disabled = busy;
+    if (btnEn) {
+      const canEn = state.report ? Boolean(state.report.can_enable_direct) : false;
+      btnEn.disabled = busy || !canEn;
+    }
+  }
+
+  function renderLoadingSkeleton() {
+    const table = document.getElementById("diagTable");
+    if (!table || table.children.length > 0) return;
+    const keys = ["node_nic", "node_cable", "node_gate", "node_share", "node_console"];
+    keys.forEach((k) => {
+      const row = document.createElement("div");
+      row.className = "diag-row sev-idle";
+      row.innerHTML = `
+        <div class="diag-name">${escapeHtml(t(k))}</div>
+        <div class="diag-detail">${escapeHtml(t("loading_row"))}</div>
+        <div class="diag-right"><span class="sev-text idle">${escapeHtml(sevLabel("idle"))}</span></div>
+      `;
+      table.appendChild(row);
+    });
+  }
+
   function describeLayerDetail(layer, combinedL6) {
     const faults = layer.faults || [];
     const primary = faults.find((f) => f.severity === "fail") || faults.find((f) => f.severity === "warn");
     if (primary) {
-      return primary.message || primary.title;
+      const lf = localizeFault(primary);
+      return lf.message || lf.title;
     }
+    const isEn = state.lang === "en";
     const m = layer.metrics || {};
     if (layer.layer === "L1") {
-      return m.selected_ethernet ? `${m.selected_ethernet} · 节能已关` : (layer.summary || "—");
+      return m.selected_ethernet
+        ? (isEn ? `${m.selected_ethernet} · Power-save off` : `${m.selected_ethernet} · 节能已关`)
+        : (layer.summary || "—");
     }
     if (layer.layer === "L2") {
-      return layer.summary ? `${layer.summary} 全双工` : "—";
+      if (layer.status === "idle") return isEn ? "Waiting for NIC" : "待网卡就绪";
+      return layer.summary ? (isEn ? `${layer.summary} Full Duplex` : `${layer.summary} 全双工`) : "—";
     }
     if (layer.layer === "L3") {
-      return "无 VPN TUN / ICS / 端口冲突";
+      return isEn ? "No VPN TUN / ICS / port conflicts" : "无 VPN TUN / ICS / 端口冲突";
     }
     if (layer.layer === "L4") {
-      return m.nat_active ? "WireDeckNat 运行中 · IP Forwarding 已开" : "未开启（日常上网模式）";
+      return m.nat_active
+        ? (isEn ? "WireDeckNat active · IP Forwarding enabled" : "WireDeckNat 运行中 · IP Forwarding 已开")
+        : (isEn ? "Standby (normal internet mode)" : "未开启（日常上网模式）");
     }
     if (layer.layer === "L5/L6") {
+      if (layer.status === "idle") {
+        const appTail = combinedL6 && combinedL6.status === "ok"
+          ? (isEn ? " · Stream client ready" : " · 串流端已就绪")
+          : "";
+        return (isEn ? "Waiting for Ethernet link" : "待网线连通") + appTail;
+      }
       const parts = [];
       if (m.peer_ip) parts.push(m.peer_ip);
-      if (layer.summary) parts.push(layer.summary);
-      if (combinedL6 && combinedL6.status === "ok") parts.push("串流端已就绪");
-      if (combinedL6 && combinedL6.status === "skipped") parts.push("轻量模式");
+      if (typeof m.peer_rtt_ms === "number") parts.push(`${m.peer_rtt_ms.toFixed(1)} ms`);
+      else if (layer.summary && !isEn && layer.summary !== "已就绪") parts.push(layer.summary);
+      if (combinedL6 && combinedL6.status === "ok") parts.push(isEn ? "Stream client ready" : "串流端已就绪");
+      if (combinedL6 && combinedL6.status === "skipped") parts.push(isEn ? "Lightweight profile" : "轻量模式");
       return parts.join(" · ") || "—";
     }
     return layer.summary || "—";
@@ -114,24 +203,30 @@
     const dot = document.getElementById("headlineDot");
     const pf = report.primary_fault;
     dot.className = "status-led " + (pf ? pf.severity : (report.mode === "direct" ? "ok" : "idle"));
-    document.getElementById("headlineText").textContent = report.headline || "";
+    document.getElementById("headlineText").textContent = localizeHeadline(report);
 
     const ethName = (byId.L1 && byId.L1.metrics && byId.L1.metrics.selected_ethernet) || "";
     const speedTxt = (byId.L2 && byId.L2.summary) || "";
-    const shareTxt = (byId.L4 && byId.L4.summary) || "";
+    const isEn = state.lang === "en";
+    const shareActive = Boolean(byId.L4 && byId.L4.metrics && byId.L4.metrics.nat_active);
     const metaParts = [];
     if (ethName) metaParts.push(ethName);
-    if (speedTxt && speedTxt !== "待检测") metaParts.push(speedTxt);
-    if (shareTxt) metaParts.push(`WinNAT ${shareTxt}`);
+    if (speedTxt && speedTxt !== "待检测" && speedTxt !== "未插线") metaParts.push(speedTxt);
+    metaParts.push(shareActive ? (isEn ? "WinNAT Active" : "WinNAT 已开启") : (isEn ? "WinNAT Standby" : "WinNAT 未开启"));
     document.getElementById("ctrlMeta").textContent = metaParts.join(" · ") || "—";
 
-    const profileMap = { xbox: "Xbox Series X|S", ps5: "PS5（轻量）", generic: "通用主机" };
+    const profileMap = isEn
+      ? { xbox: "Xbox Series X|S", ps5: "PS5 (Light)", generic: "Generic Console" }
+      : { xbox: "Xbox Series X|S", ps5: "PS5（轻量）", generic: "通用主机" };
     document.getElementById("sbProfile").textContent = profileMap[report.console_profile] || report.console_profile;
 
-    // Combine L5 + L6 cleanly into Row 5
+    // Combine L5 + L6 cleanly into Row 5 (never show OK when L5 itself is still idle/unplugged!)
     const l5 = byId.L5 || { layer: "L5", status: "idle", summary: "待检测", faults: [], metrics: {} };
     const l6 = byId.L6 || { layer: "L6", status: "skipped", summary: "", faults: [], metrics: {} };
-    const combinedStatus = severityRank(l6.status) > severityRank(l5.status) ? l6.status : l5.status;
+    let combinedStatus = severityRank(l6.status) > severityRank(l5.status) ? l6.status : l5.status;
+    if (l5.status === "idle" && l6.status === "ok") {
+      combinedStatus = "idle";
+    }
     const combinedSummary = severityRank(l5.status) >= severityRank(l6.status) ? l5.summary : l6.summary;
     const combinedNode = {
       key: "node_console",
@@ -190,14 +285,18 @@
       table.appendChild(rowEl);
     });
 
-    // Native InfoBar (breakpoint / warning)
+    // Native InfoBar (with multi-blocker count so nothing is hidden)
     const bpCard = document.getElementById("breakpointCard");
     if (pf) {
+      const allFails = layers.flatMap((x) => (x.faults || []).filter((f) => f.severity === "fail"));
+      const extraFails = Math.max(0, allFails.length - (pf.severity === "fail" ? 1 : 0));
+      const lf = localizeFault(pf);
       bpCard.classList.remove("hidden");
       bpCard.classList.toggle("warn", pf.severity === "warn");
       document.getElementById("bpIcon").textContent = pf.severity === "warn" ? "!" : "✕";
-      document.getElementById("bpTitle").textContent = pf.title || pf.code;
-      document.getElementById("bpMessage").textContent = pf.message || "";
+      document.getElementById("bpTitle").textContent = lf.title;
+      const suffix = extraFails > 0 ? `（${t("more_blockers").replace("{n}", String(extraFails))}）` : "";
+      document.getElementById("bpMessage").textContent = lf.message + suffix;
       document.getElementById("bpExtPill").style.display = pf.source === "extension" ? "inline-flex" : "none";
 
       const fixBtn = document.getElementById("bpFixBtn");
@@ -218,9 +317,11 @@
       bpCard.classList.add("hidden");
     }
 
-    // Action buttons
+    // Action buttons + disabled reason tooltip
     const btnEn = document.getElementById("btnEnableDirect");
     btnEn.disabled = state.busy || !report.can_enable_direct;
+    btnEn.title = report.can_enable_direct ? "" : t("disabled_hint");
+    document.getElementById("btnDisableDirect").disabled = state.busy;
 
     updateWizardState(byId, report);
     if (byId.L1 && byId.L1.metrics && byId.L1.metrics.physical_ethernets) {
@@ -232,7 +333,7 @@
     const l1 = byId.L1 || { status: "idle" };
     const l2 = byId.L2 || { status: "idle" };
     const l5 = byId.L5 || { status: "idle" };
-    const l6 = byId.L6 || { status: "skipped", faults: [] };
+    const l6 = byId.L6 || { status: "skipped", faults: [], metrics: {} };
 
     const s1Status = (l1.status === "ok" && l2.status === "ok") ? "ok" : (l1.status === "fail" ? "fail" : "warn");
     setBadge("wizS1Badge", s1Status);
@@ -240,6 +341,7 @@
     const isXbox = report.console_profile === "xbox";
     document.getElementById("wizStep2").classList.toggle("skipped", !isXbox);
     document.getElementById("wizStep3").classList.toggle("skipped", !isXbox);
+    let hasWizTodo = (s1Status !== "ok");
     if (!isXbox) {
       setBadge("wizS2Badge", "skipped");
       setBadge("wizS3Badge", "skipped");
@@ -248,8 +350,19 @@
       const hasClientMiss = (l6.faults || []).some((f) => f.code === "STREAM_CLIENT_MISSING");
       setBadge("wizS2Badge", hasUwpMiss ? "warn" : "ok");
       setBadge("wizS3Badge", hasClientMiss ? "warn" : "ok");
+      if (hasUwpMiss || hasClientMiss) hasWizTodo = true;
+
+      const s3Desc = document.getElementById("wizS3Desc");
+      const m6 = l6.metrics || {};
+      if (s3Desc) {
+        if (m6.xstreaming_path) s3Desc.textContent = t("wiz_client_xstreaming");
+        else if (m6.xbox_app_installed) s3Desc.textContent = t("wiz_client_xbox");
+        else s3Desc.textContent = t("wiz_client_none");
+      }
     }
     setBadge("wizS4Badge", l5.status === "ok" ? "ok" : "idle");
+    const wizDot = document.getElementById("wizDot");
+    if (wizDot) wizDot.classList.toggle("show", hasWizTodo);
   }
 
   function setBadge(id, sev) {
@@ -259,22 +372,29 @@
     el.textContent = sevLabel(sev);
   }
 
+  let _lastDetailText = "";
   function openNodeDetail(title, layer) {
     document.getElementById("detailTitle").textContent = `${title} (${layer.layer})`;
     const faults = layer.faults || [];
     const lines = [];
     if (faults.length === 0) {
-      lines.push(`状态：${sevLabel(layer.status)}（${layer.summary || "无异常"}）`);
+      lines.push(`${sevLabel(layer.status)} — ${describeLayerDetail(layer, null)}`);
     } else {
       faults.forEach((f) => {
-        const tag = f.source === "extension" ? `[AI 扩展: ${f.ext_id}] ` : "";
-        lines.push(`• ${tag}[${f.code}] ${f.title} — ${f.message}`);
+        const lf = localizeFault(f);
+        const tag = f.source === "extension" ? `[AI: ${f.ext_id}] ` : "";
+        lines.push(`• ${tag}[${f.code}] ${lf.title} — ${lf.message}`);
       });
     }
-    if (layer.metrics && Object.keys(layer.metrics).length > 0) {
+    const m = layer.metrics || {};
+    const metricEntries = Object.entries(m).filter(([, v]) => v !== null && v !== "" && !(Array.isArray(v) && v.length === 0));
+    if (metricEntries.length > 0) {
       lines.push("");
-      lines.push("Metrics: " + JSON.stringify(layer.metrics));
+      metricEntries.forEach(([k, v]) => {
+        lines.push(`${k}: ${typeof v === "object" ? JSON.stringify(v) : String(v)}`);
+      });
     }
+    _lastDetailText = lines.join("\n");
     document.getElementById("detailBody").innerHTML = lines.map((x) => `<div>${escapeHtml(x)}</div>`).join("");
     document.getElementById("detailModal").classList.add("open");
   }
@@ -286,6 +406,7 @@
     }
     if (fault.fix_action === "clear-netnat") {
       const names = (fault.details && fault.details.nat_names) ? fault.details.nat_names.join(", ") : "";
+      document.getElementById("confirmTitle").textContent = t("confirm_netnat_title");
       document.getElementById("confirmBody").textContent =
         `${t("confirm_netnat_body")}${names ? " (" + names + ")" : ""}`;
       state.confirmCallback = () => runAction("clear-netnat", { force: true });
@@ -301,8 +422,8 @@
 
   async function runAction(action, opts) {
     const api = getApi();
-    if (!api) return;
-    state.busy = true;
+    if (!api || state.busy) return;
+    setBusy(true);
     showToast(t("toast_working"));
     try {
       const res = await api.run_action(action, opts || {});
@@ -311,7 +432,7 @@
     } catch (err) {
       showToast(String(err));
     } finally {
-      state.busy = false;
+      setBusy(false);
     }
   }
 
@@ -440,20 +561,25 @@
   async function refreshAll(silent) {
     const api = getApi();
     if (!api) return;
-    const st = await api.get_state();
-    state.appState = st;
-    document.getElementById("versionLabel").textContent = "v" + st.app_version;
-    syncConfigDisplay(st.config);
-    renderBridgeState(st.bridge);
-    const [rep, exts] = await Promise.all([api.diagnose(), api.list_extensions()]);
-    renderReport(rep);
-    renderExtensions(exts);
+    setBusy(true);
+    try {
+      const st = await api.get_state();
+      state.appState = st;
+      document.getElementById("versionLabel").textContent = "v" + st.app_version;
+      syncConfigDisplay(st.config);
+      renderBridgeState(st.bridge);
+      const [rep, exts] = await Promise.all([api.diagnose(), api.list_extensions()]);
+      renderReport(rep);
+      renderExtensions(exts);
 
-    if (st.preview_view && !refreshAll._previewApplied) {
-      refreshAll._previewApplied = true;
-      switchView(st.preview_view);
+      if (st.preview_view && !refreshAll._previewApplied) {
+        refreshAll._previewApplied = true;
+        switchView(st.preview_view);
+      }
+      if (!silent) showToast(t("toast_refreshed"));
+    } finally {
+      setBusy(false);
     }
-    if (!silent) showToast(t("toast_refreshed"));
   }
 
   async function copyText(text) {
@@ -541,7 +667,23 @@
 
     document.getElementById("btnWizFixNic").addEventListener("click", () => runAction("fix-nic", {}));
     document.getElementById("btnWizFixUwp").addEventListener("click", () => runAction("fix-uwp", {}));
-    document.getElementById("btnWizTestPeer").addEventListener("click", () => refreshAll(false));
+    document.getElementById("btnWizTestPeer").addEventListener("click", async () => {
+      const api = getApi();
+      if (!api) return;
+      const box = document.getElementById("peerPingResult");
+      box.className = "peer-ping-result show";
+      box.textContent = t("ping_testing");
+      const res = await api.ping_peer_now();
+      if (res.ok) {
+        const rttTxt = typeof res.rtt_ms === "number" ? ` (${res.rtt_ms.toFixed(1)} ms)` : "";
+        box.className = "peer-ping-result show ok";
+        box.textContent = `● ${res.peer_ip} ${t("ping_ok")}${rttTxt}`;
+        setBadge("wizS4Badge", "ok");
+      } else {
+        box.className = "peer-ping-result show fail";
+        box.textContent = `✕ ${res.peer_ip} ${t("ping_fail")}`;
+      }
+    });
     document.getElementById("btnWizCopyIp").addEventListener("click", async () => {
       const cfg = (state.appState && state.appState.config) || {};
       const txt = `IP: ${cfg.peer_ip || "192.168.50.1"}\nMask: ${cfg.subnet_mask || "255.255.255.0"}\nGateway: ${cfg.host_ip || "192.168.50.2"}\nDNS: ${(cfg.dns_servers || ["223.5.5.5", "8.8.8.8"]).join(" / ")}`;
@@ -560,7 +702,28 @@
     document.getElementById("btnOpenExtFolder").addEventListener("click", () => getApi() && getApi().open_folder("extensions"));
     document.getElementById("btnOpenLogs").addEventListener("click", () => getApi() && getApi().open_folder("logs"));
     document.getElementById("btnOpenData").addEventListener("click", () => getApi() && getApi().open_folder("data"));
-    document.getElementById("btnResetNic").addEventListener("click", () => runAction("reset-nic", {}));
+    document.getElementById("btnResetNic").addEventListener("click", () => {
+      document.getElementById("confirmTitle").textContent = t("confirm_reset_title");
+      document.getElementById("confirmBody").textContent = t("confirm_reset_body");
+      state.confirmCallback = () => runAction("reset-nic", {});
+      document.getElementById("confirmModal").classList.add("open");
+    });
+
+    // Live instant preview + auto-save on Theme / Language switch (Windows 11 Settings feel)
+    document.getElementById("setTheme").addEventListener("change", async (e) => {
+      applyTheme(e.target.value);
+      const api = getApi();
+      if (api) await api.save_settings({ theme: e.target.value });
+    });
+    document.getElementById("setLanguage").addEventListener("change", async (e) => {
+      state.lang = e.target.value;
+      applyI18n();
+      const api = getApi();
+      if (api) {
+        await api.save_settings({ language: e.target.value });
+        if (state.report) renderReport(state.report);
+      }
+    });
 
     document.getElementById("bridgeToggle").addEventListener("change", async (e) => {
       const api = getApi();
@@ -586,7 +749,11 @@
         host_ip: document.getElementById("setHostIp").value.trim(),
         peer_ip: document.getElementById("setPeerIp").value.trim(),
       };
-      await api.save_settings(patch);
+      const res = await api.save_settings(patch);
+      if (!res.ok) {
+        showToast(res.message || res.code);
+        return;
+      }
       showToast(t("toast_saved"));
       await refreshAll(true);
     });
@@ -604,6 +771,12 @@
 
     document.getElementById("btnCloseDetail").addEventListener("click", () => {
       document.getElementById("detailModal").classList.remove("open");
+    });
+    document.getElementById("btnCopyDetail").addEventListener("click", async () => {
+      if (_lastDetailText) {
+        await copyText(_lastDetailText);
+        showToast(t("toast_copied"));
+      }
     });
 
     document.getElementById("btnBridgeDeny").addEventListener("click", async () => {
@@ -631,6 +804,7 @@
   window.addEventListener("DOMContentLoaded", () => {
     wireEvents();
     applyI18n();
+    renderLoadingSkeleton();
   });
 
   window.addEventListener("pywebviewready", () => {

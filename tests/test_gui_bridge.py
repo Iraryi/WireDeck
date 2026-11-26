@@ -44,6 +44,11 @@ def test_wiredeck_api_state_settings_export_and_bridge_toggle(tmp_path: Path):
     assert api.get_state()["config"]["language"] == "en"
     assert api.get_state()["config"]["console_profile"] == "ps5"
 
+    # Settings validation rejects invalid IP, duplicate IP, and cross-subnet IP
+    assert api.save_settings({"host_ip": "999.1.1.1"})["ok"] is False
+    assert api.save_settings({"host_ip": "192.168.50.2", "peer_ip": "192.168.50.2"})["code"] == "SAME_IP"
+    assert api.save_settings({"host_ip": "192.168.50.2", "peer_ip": "10.0.0.1"})["code"] == "SUBNET_MISMATCH"
+
     exp = api.export_for_ai()
     assert exp["ok"] is True
     assert Path(exp["bundle_path"]).is_file()

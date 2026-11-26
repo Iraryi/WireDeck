@@ -20,7 +20,7 @@
 
 #define AppName "WireDeck"
 #define AppPublisher "WireDeck Contributors"
-#define AppURL "https://github.com/wiredeck/WireDeck"
+#define AppURL "https://github.com/Iraryi/WireDeck"
 #define AppIdEscaped "{" + AppId
 
 [Setup]

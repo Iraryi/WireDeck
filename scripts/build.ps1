@@ -63,7 +63,7 @@ VSVersionInfo(
         '040904B0',
         [
           StringStruct('CompanyName', '$Publisher'),
-          StringStruct('FileDescription', '$AppName - Gigabit Wired Console Streaming Assistant'),
+          StringStruct('FileDescription', '$AppName - Wired & Wireless Console Streaming Assistant'),
           StringStruct('FileVersion', '$AppVersion'),
           StringStruct('InternalName', '$AppName'),
           StringStruct('OriginalFilename', '$AppName.exe'),

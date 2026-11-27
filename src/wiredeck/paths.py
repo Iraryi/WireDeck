@@ -17,6 +17,8 @@ class AppPaths:
     data_dir: Path
     config_file: Path
     extensions_dir: Path
+    plugins_dir: Path
+    plugin_configs_dir: Path
     logs_dir: Path
     exports_dir: Path
     runtime_dir: Path
@@ -28,6 +30,8 @@ class AppPaths:
             "data_dir": str(self.data_dir),
             "config_file": str(self.config_file),
             "extensions_dir": str(self.extensions_dir),
+            "plugins_dir": str(self.plugins_dir),
+            "plugin_configs_dir": str(self.plugin_configs_dir),
             "logs_dir": str(self.logs_dir),
             "exports_dir": str(self.exports_dir),
             "runtime_dir": str(self.runtime_dir),
@@ -121,6 +125,8 @@ def resolve_app_paths_from_data_dir(
         data_dir=resolved_data,
         config_file=resolved_data / "config.json",
         extensions_dir=resolved_data / "extensions",
+        plugins_dir=resolved_data / "plugins",
+        plugin_configs_dir=resolved_data / "plugin_configs",
         logs_dir=resolved_data / "logs",
         exports_dir=resolved_data / "exports",
         runtime_dir=resolved_data / "runtime",
@@ -129,6 +135,8 @@ def resolve_app_paths_from_data_dir(
         for d in (
             paths.data_dir,
             paths.extensions_dir,
+            paths.plugins_dir,
+            paths.plugin_configs_dir,
             paths.logs_dir,
             paths.exports_dir,
             paths.runtime_dir,
@@ -163,6 +171,8 @@ def resolve_app_paths(
         data_dir=data_dir,
         config_file=data_dir / "config.json",
         extensions_dir=data_dir / "extensions",
+        plugins_dir=data_dir / "plugins",
+        plugin_configs_dir=data_dir / "plugin_configs",
         logs_dir=data_dir / "logs",
         exports_dir=data_dir / "exports",
         runtime_dir=data_dir / "runtime",
@@ -172,6 +182,8 @@ def resolve_app_paths(
         for d in (
             paths.data_dir,
             paths.extensions_dir,
+            paths.plugins_dir,
+            paths.plugin_configs_dir,
             paths.logs_dir,
             paths.exports_dir,
             paths.runtime_dir,

@@ -40,6 +40,17 @@
     guidePingResult: null,
     guideShortcutCreatedKey: "",
     guideRestoreShortcutCreated: false,
+    pluginsInstalled: [],
+    pluginsCatalog: null,
+    pluginsTab: "catalog",
+    pluginsCategory: "all",
+    activePluginConfig: null,
+    pluginBadges: [],
+    recorderState: null,
+    recorderTab: "control",
+    recorderPollTimer: null,
+    activeRenameClip: null,
+    systemHealth: null,
   };
 
   function t(key) {
@@ -67,6 +78,9 @@
     if (state.guideSteps && state.guideSteps.length) {
       const activeRep = state.transport === "wireless" ? state.wirelessReport : state.report;
       if (activeRep) updateWizardState(layerMapOf(activeRep), activeRep);
+    }
+    if (document.getElementById("viewPlugins") && document.getElementById("viewPlugins").classList.contains("active")) {
+      renderPluginsView();
     }
   }
 
@@ -134,6 +148,23 @@
           await refreshAll(true);
         }
       }
+    }
+
+    if (name === "plugins") {
+      renderPluginsView();
+      if (!state.pluginsCatalog && api && api.fetch_plugin_catalog) {
+        await loadPluginsData(true);
+      }
+    }
+
+    if (name === "recorder") {
+      renderRecorderView();
+      if (!state.recorderState && api && api.get_recorder_state) {
+        await loadRecorderData();
+      }
+      syncRecorderTelemetryPolling();
+    } else {
+      syncRecorderTelemetryPolling();
     }
   }
 
@@ -1371,6 +1402,35 @@
       entryCard.appendChild(entryActs);
       host.appendChild(entryCard);
 
+      const plgStrip = document.createElement("div");
+      plgStrip.className = "guide-plugins-strip";
+      const badges = state.pluginBadges || [];
+      if (badges.length) {
+        const leftBox = document.createElement("div");
+        leftBox.className = "guide-plugins-pills";
+        const lbl = document.createElement("span");
+        lbl.textContent = t("guide_plugins_active");
+        leftBox.appendChild(lbl);
+        badges.forEach((b) => {
+          const tag = document.createElement("span");
+          tag.className = "ext-tag";
+          tag.textContent = b.name;
+          leftBox.appendChild(tag);
+        });
+        plgStrip.appendChild(leftBox);
+      } else {
+        const lbl = document.createElement("span");
+        lbl.textContent = t("guide_plugins_none");
+        plgStrip.appendChild(lbl);
+      }
+      const goPlg = document.createElement("button");
+      goPlg.type = "button";
+      goPlg.className = "btn-link-subtle";
+      goPlg.textContent = t("guide_plugins_goto");
+      goPlg.addEventListener("click", () => switchView("plugins", true));
+      plgStrip.appendChild(goPlg);
+      host.appendChild(plgStrip);
+
       if (step.dailyTip) {
         const tipRow = document.createElement("div");
         tipRow.className = "guide-tip-row";
@@ -1846,8 +1906,918 @@
     document.getElementById("setDns").value = (cfg.dns_servers || ["223.5.5.5", "8.8.8.8"]).join(", ");
     document.getElementById("setWirelessPeerIp").value = cfg.wireless_peer_ip || "";
     document.getElementById("setHotspot5G").checked = cfg.hotspot_prefer_5ghz !== false;
+    const kaEl = document.getElementById("setKeepAwake");
+    if (kaEl) kaEl.checked = cfg.keep_awake_during_stream !== false;
+    const arEl = document.getElementById("setAutoRestoreExit");
+    if (arEl) arEl.checked = Boolean(cfg.auto_restore_on_exit);
     document.getElementById("wLanPeerInput").value = cfg.wireless_peer_ip || "";
     updateStatusBar(cfg);
+  }
+
+  function renderSystemHealthBadge(health) {
+    const btn = document.getElementById("sbHealthBtn");
+    if (!btn) return;
+    state.systemHealth = health || null;
+    if (!health || !health.ok) {
+      btn.className = "sb-link";
+      btn.textContent = t("sb_health_ok");
+      return;
+    }
+    const wc = Number(health.warning_count || 0);
+    if (wc > 0) {
+      btn.className = "sb-link sb-health-warn";
+      btn.textContent = t("sb_health_warn").replace("{n}", String(wc));
+    } else {
+      btn.className = "sb-link sb-health-ok";
+      btn.textContent = t("sb_health_ok");
+    }
+  }
+
+  function openSystemHealthModal() {
+    const h = state.systemHealth;
+    if (!h) return;
+    const lines = [];
+    (h.items || []).forEach((it) => {
+      const icon = it.ok ? "✓" : "▲";
+      lines.push(`${icon} ${it.label}: ${it.value}`);
+    });
+    const warns = h.warnings || [];
+    if (warns.length) {
+      lines.push("");
+      warns.forEach((w) => {
+        lines.push(`! [${w.code}] ${w.title}`);
+        if (w.detail) lines.push(`  ${w.detail}`);
+      });
+    } else {
+      lines.push("");
+      lines.push(t("health_all_clear"));
+    }
+    openTextModal(t("health_modal_title"), lines.join("\n"));
+  }
+
+  function compareSemver(a, b) {
+    const parse = (s) => String(s || "0").replace(/^[vV]/, "").split(/[.\-+]/).map((x) => parseInt(x, 10) || 0);
+    const pa = parse(a);
+    const pb = parse(b);
+    const len = Math.max(pa.length, pb.length);
+    for (let i = 0; i < len; i += 1) {
+      const va = pa[i] || 0;
+      const vb = pb[i] || 0;
+      if (va < vb) return -1;
+      if (va > vb) return 1;
+    }
+    return 0;
+  }
+
+  function collectPluginFormSettings(manifest) {
+    const form = document.getElementById("pluginConfigForm");
+    const out = {};
+    (manifest.settings_schema || []).forEach((field) => {
+      if (field.type === "bool") {
+        const el = form.querySelector(`[data-plg-key="${field.key}"]`);
+        if (el) out[field.key] = Boolean(el.checked);
+      } else if (field.type === "number") {
+        const el = form.querySelector(`[data-plg-key="${field.key}"]`);
+        if (el) {
+          const val = parseFloat(el.value);
+          out[field.key] = Number.isNaN(val) ? (field.default || 0) : val;
+        }
+      } else if (field.type === "multi_preset") {
+        const checks = form.querySelectorAll(`[data-plg-preset-key="${field.key}"]`);
+        const picked = [];
+        checks.forEach((chk) => {
+          if (chk.checked) picked.push(chk.value);
+        });
+        out[field.key] = picked;
+      } else {
+        const el = form.querySelector(`[data-plg-key="${field.key}"]`);
+        if (el) out[field.key] = String(el.value || "").trim();
+      }
+    });
+    return out;
+  }
+
+  function openPluginConfigModal(entry) {
+    const m = (entry && entry.manifest) || {};
+    state.activePluginConfig = entry;
+    document.getElementById("pluginConfigTitle").textContent = `${m.name || m.id} (v${m.version || "1.0.0"})`;
+
+    const actsHost = document.getElementById("pluginConfigActions");
+    actsHost.innerHTML = "";
+    (m.actions || []).forEach((act) => {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = act.style === "primary" ? "btn btn-sm btn-primary" : "btn btn-sm";
+      btn.textContent = act.label || act.id;
+      if (act.description) btn.title = act.description;
+      btn.addEventListener("click", async () => {
+        const api = getApi();
+        if (!api || !api.run_plugin_action) return;
+        btn.disabled = true;
+        try {
+          const res = await api.run_plugin_action(m.id, act.id);
+          showToast((res && res.message) || "OK");
+          if (res && res.saved_settings && Object.keys(res.saved_settings).length) {
+            await loadPluginsData(false);
+            const refreshed = (state.pluginsInstalled || []).find((x) => x.manifest && x.manifest.id === m.id);
+            if (refreshed) openPluginConfigModal(refreshed);
+          }
+        } finally {
+          btn.disabled = false;
+        }
+      });
+      actsHost.appendChild(btn);
+    });
+
+    const form = document.getElementById("pluginConfigForm");
+    form.innerHTML = "";
+    const banner = document.getElementById("pluginConfigBanner");
+    if (banner) {
+      banner.style.display = "none";
+      banner.className = "plugin-cfg-banner";
+      banner.textContent = "";
+    }
+    const curSettings = (entry && entry.settings) || {};
+    const fields = m.settings_schema || [];
+    const dynamicSelects = [];
+    if (!fields.length) {
+      const empty = document.createElement("div");
+      empty.className = "guide-tip";
+      empty.textContent = t("plugins_no_settings");
+      form.appendChild(empty);
+    } else {
+      fields.forEach((field) => {
+        const row = document.createElement("div");
+        row.className = "plugin-form-row";
+        const info = document.createElement("div");
+        info.className = "plugin-form-info";
+        info.innerHTML = `
+          <div class="plugin-form-lbl">${escapeHtml(field.label || field.key)}</div>
+          ${field.description ? `<div class="plugin-form-desc">${escapeHtml(field.description)}</div>` : ""}
+        `;
+        row.appendChild(info);
+
+        const ctrl = document.createElement("div");
+        ctrl.className = "plugin-form-ctrl";
+        const curVal = Object.prototype.hasOwnProperty.call(curSettings, field.key) ? curSettings[field.key] : field.default;
+
+        if (field.type === "bool") {
+          const sw = document.createElement("label");
+          sw.className = "win-switch";
+          const inp = document.createElement("input");
+          inp.type = "checkbox";
+          inp.setAttribute("data-plg-key", field.key);
+          inp.checked = Boolean(curVal);
+          const slider = document.createElement("span");
+          slider.className = "win-slider";
+          sw.appendChild(inp);
+          sw.appendChild(slider);
+          ctrl.appendChild(sw);
+        } else if (field.type === "select" || field.type === "dynamic_select") {
+          const sel = document.createElement("select");
+          sel.setAttribute("data-plg-key", field.key);
+          const baseOpts = field.options || [];
+          baseOpts.forEach((opt) => {
+            const o = document.createElement("option");
+            o.value = opt.value;
+            o.textContent = opt.label || opt.value;
+            if (String(curVal) === String(opt.value)) o.selected = true;
+            sel.appendChild(o);
+          });
+          if (curVal && !baseOpts.some((opt) => String(opt.value) === String(curVal))) {
+            const curOpt = document.createElement("option");
+            curOpt.value = String(curVal);
+            curOpt.textContent = String(curVal);
+            curOpt.selected = true;
+            sel.appendChild(curOpt);
+          }
+          if (field.type === "dynamic_select") {
+            dynamicSelects.push({ key: field.key, sel, curVal: String(curVal || "") });
+          }
+          ctrl.appendChild(sel);
+        } else if (field.type === "number") {
+          const inp = document.createElement("input");
+          inp.type = "number";
+          inp.className = "mono";
+          inp.setAttribute("data-plg-key", field.key);
+          if (field.min !== null && field.min !== undefined) inp.min = String(field.min);
+          if (field.max !== null && field.max !== undefined) inp.max = String(field.max);
+          if (field.step !== null && field.step !== undefined) inp.step = String(field.step);
+          inp.value = String(curVal !== undefined ? curVal : 1);
+          ctrl.appendChild(inp);
+        } else if (field.type === "file_path") {
+          const inp = document.createElement("input");
+          inp.type = "text";
+          inp.className = "mono";
+          inp.setAttribute("data-plg-key", field.key);
+          inp.value = String(curVal || "");
+          if (field.placeholder) inp.placeholder = field.placeholder;
+          ctrl.appendChild(inp);
+          const br = document.createElement("button");
+          br.type = "button";
+          br.className = "btn btn-sm";
+          br.textContent = t("plugins_browse");
+          br.addEventListener("click", async () => {
+            const api = getApi();
+            if (!api || !api.pick_plugin_file) return;
+            const picked = await api.pick_plugin_file(field.file_filter || "");
+            if (picked && picked.ok && picked.path) inp.value = picked.path;
+          });
+          ctrl.appendChild(br);
+        } else if (field.type === "multi_preset") {
+          const box = document.createElement("div");
+          box.className = "plugin-preset-checks";
+          const pickedList = Array.isArray(curVal) ? curVal : [];
+          PRESET_ORDER.forEach((pid) => {
+            const lbl = document.createElement("label");
+            lbl.className = "inline-check";
+            const chk = document.createElement("input");
+            chk.type = "checkbox";
+            chk.value = pid;
+            chk.setAttribute("data-plg-preset-key", field.key);
+            chk.checked = pickedList.includes(pid) || pickedList.includes("all");
+            const txt = document.createElement("span");
+            txt.textContent = pid === "playstation" ? "PS" : (pid === "handheld" ? "Deck" : pid.toUpperCase());
+            lbl.appendChild(chk);
+            lbl.appendChild(txt);
+            box.appendChild(lbl);
+          });
+          ctrl.appendChild(box);
+        } else {
+          const inp = document.createElement("input");
+          inp.type = "text";
+          inp.className = "mono";
+          inp.setAttribute("data-plg-key", field.key);
+          inp.value = String(curVal || "");
+          if (field.placeholder) inp.placeholder = field.placeholder;
+          ctrl.appendChild(inp);
+        }
+
+        row.appendChild(ctrl);
+        form.appendChild(row);
+      });
+    }
+
+    document.getElementById("pluginConfigModal").classList.add("open");
+
+    const api = getApi();
+    if (api && m.id) {
+      Promise.all([
+        dynamicSelects.length && api.get_plugin_dynamic_options ? api.get_plugin_dynamic_options(m.id) : Promise.resolve(null),
+        m.diagnostic_check && api.run_plugin_check ? api.run_plugin_check(m.id) : Promise.resolve(null),
+      ]).then(([dynRes, chkRes]) => {
+        if (!state.activePluginConfig || !state.activePluginConfig.manifest || state.activePluginConfig.manifest.id !== m.id) return;
+        if (dynRes && dynRes.ok && dynRes.options_by_key) {
+          dynamicSelects.forEach(({ key, sel, curVal }) => {
+            const opts = dynRes.options_by_key[key];
+            if (Array.isArray(opts) && opts.length) {
+              const chosen = sel.value || curVal;
+              sel.innerHTML = "";
+              opts.forEach((opt) => {
+                const o = document.createElement("option");
+                o.value = opt.value;
+                o.textContent = opt.label || opt.value;
+                if (String(chosen) === String(opt.value)) o.selected = true;
+                sel.appendChild(o);
+              });
+              if (chosen && !opts.some((opt) => String(opt.value) === String(chosen))) {
+                const keepOpt = document.createElement("option");
+                keepOpt.value = chosen;
+                keepOpt.textContent = chosen;
+                keepOpt.selected = true;
+                sel.appendChild(keepOpt);
+              }
+            }
+          });
+        }
+        if (banner && chkRes && chkRes.message) {
+          banner.textContent = chkRes.message;
+          banner.className = "plugin-cfg-banner " + (chkRes.status === "ok" ? "ok" : (chkRes.status === "warn" ? "warn" : ""));
+          banner.style.display = "block";
+        }
+      }).catch(() => {});
+    }
+  }
+
+  function renderPluginsView() {
+    const installed = state.pluginsInstalled || [];
+    const byId = {};
+    installed.forEach((entry) => {
+      if (entry.manifest && entry.manifest.id) byId[entry.manifest.id] = entry;
+    });
+
+    const activeCount = installed.filter((e) => e.valid && e.enabled).length;
+    const dot = document.getElementById("pluginsDot");
+    if (dot) dot.classList.toggle("show", activeCount > 0);
+
+    const tabCatBtn = document.getElementById("btnPluginTabCatalog");
+    const tabInstBtn = document.getElementById("btnPluginTabInstalled");
+    const catPane = document.getElementById("pluginsCatalogPane");
+    const instPane = document.getElementById("pluginsInstalledPane");
+    if (tabCatBtn && tabInstBtn && catPane && instPane) {
+      tabCatBtn.classList.toggle("active", state.pluginsTab === "catalog");
+      tabInstBtn.classList.toggle("active", state.pluginsTab === "installed");
+      catPane.style.display = state.pluginsTab === "catalog" ? "flex" : "none";
+      instPane.style.display = state.pluginsTab === "installed" ? "flex" : "none";
+    }
+
+    document.querySelectorAll("#pluginCatBar .cat-chip").forEach((chip) => {
+      chip.classList.toggle("active", chip.getAttribute("data-cat") === state.pluginsCategory);
+    });
+
+    // Render GitHub Catalog List
+    const catHost = document.getElementById("pluginCatalogList");
+    if (catHost) {
+      catHost.innerHTML = "";
+      const catalog = state.pluginsCatalog;
+      if (!catalog) {
+        catHost.innerHTML = `<div class="list-row"><span class="row-desc">${escapeHtml(t("loading_headline"))}</span></div>`;
+      } else if (!catalog.ok) {
+        catHost.innerHTML = `<div class="list-row"><span class="row-desc">${escapeHtml(catalog.error || "GitHub error")}</span></div>`;
+      } else {
+        const items = (catalog.plugins || []).filter((p) => {
+          if (state.pluginsCategory === "all") return true;
+          const caps = p.capabilities || [];
+          return p.category === state.pluginsCategory || caps.includes(state.pluginsCategory);
+        });
+        if (!items.length) {
+          catHost.innerHTML = `<div class="list-row"><span class="row-desc">${escapeHtml(t("plugins_empty_catalog"))}</span></div>`;
+        } else {
+          items.forEach((p) => {
+            const existing = byId[p.id];
+            const hasUpdate = Boolean(existing && existing.manifest && compareSemver(existing.manifest.version, p.version) < 0);
+            const card = document.createElement("div");
+            card.className = "plugin-card";
+
+            const main = document.createElement("div");
+            main.className = "plugin-main";
+            const capsHtml = (p.capabilities || []).map((c) => `<span class="ext-tag">${escapeHtml(c)}</span>`).join("");
+            const reqText = (p.requirements && p.requirements.summary) ? `<div class="plugin-req">${escapeHtml(p.requirements.summary)}</div>` : "";
+            main.innerHTML = `
+              <div class="plugin-head">
+                <span class="plugin-name">${escapeHtml(p.name || p.id)}</span>
+                <span class="plugin-ver mono">v${escapeHtml(p.version || "1.0.0")}</span>
+                ${p.author ? `<span class="plugin-ver">by ${escapeHtml(p.author)}</span>` : ""}
+                <div class="plugin-pills">${capsHtml}</div>
+              </div>
+              <div class="plugin-desc">${escapeHtml(p.description || "")}</div>
+              ${reqText}
+            `;
+            card.appendChild(main);
+
+            const side = document.createElement("div");
+            side.className = "plugin-side";
+            if (p.coming_soon) {
+              const tag = document.createElement("span");
+              tag.className = "ext-tag";
+              tag.textContent = t("plugins_coming_soon");
+              side.appendChild(tag);
+            } else if (existing && !hasUpdate) {
+              const cfgBtn = document.createElement("button");
+              cfgBtn.type = "button";
+              cfgBtn.className = "btn btn-sm";
+              cfgBtn.textContent = t("plugins_cfg");
+              cfgBtn.addEventListener("click", () => openPluginConfigModal(existing));
+              side.appendChild(cfgBtn);
+
+              const badge = document.createElement("span");
+              badge.className = "sev-text ok";
+              badge.textContent = `● ${t("plugins_installed_badge")}`;
+              side.appendChild(badge);
+            } else {
+              const instBtn = document.createElement("button");
+              instBtn.type = "button";
+              instBtn.className = "btn btn-sm btn-primary";
+              instBtn.textContent = t(hasUpdate ? "plugins_update" : "plugins_install");
+              instBtn.addEventListener("click", async () => {
+                const api = getApi();
+                if (!api || !api.install_plugin) return;
+                instBtn.disabled = true;
+                showToast(t("toast_working"));
+                try {
+                  const res = await api.install_plugin(p.id, "");
+                  showToast((res && res.message) || "OK");
+                  await loadPluginsData(false);
+                } finally {
+                  instBtn.disabled = false;
+                }
+              });
+              side.appendChild(instBtn);
+            }
+            card.appendChild(side);
+            catHost.appendChild(card);
+          });
+        }
+      }
+    }
+
+    // Render Installed Plugins List
+    const instHost = document.getElementById("pluginInstalledList");
+    if (instHost) {
+      instHost.innerHTML = "";
+      if (!installed.length) {
+        instHost.innerHTML = `<div class="list-row"><span class="row-desc">${escapeHtml(t("plugins_empty_installed"))}</span></div>`;
+      } else {
+        installed.forEach((entry) => {
+          const m = entry.manifest || {};
+          const card = document.createElement("div");
+          card.className = "plugin-card";
+          const main = document.createElement("div");
+          main.className = "plugin-main";
+          const hooksCount = Object.keys(m.hooks || {}).length;
+          const desc = entry.valid ? (m.description || "") : (entry.errors || []).join("; ");
+          main.innerHTML = `
+            <div class="plugin-head">
+              <span class="plugin-name">${escapeHtml(m.name || m.id)}</span>
+              ${m.version ? `<span class="plugin-ver mono">v${escapeHtml(m.version)}</span>` : ""}
+              ${hooksCount ? `<span class="ext-tag">${hooksCount} hooks</span>` : ""}
+            </div>
+            <div class="plugin-desc">${escapeHtml(desc)}</div>
+          `;
+          card.appendChild(main);
+
+          const side = document.createElement("div");
+          side.className = "plugin-side";
+          if (entry.valid) {
+            const toggleBtn = document.createElement("button");
+            toggleBtn.type = "button";
+            toggleBtn.className = entry.enabled ? "btn btn-sm" : "btn btn-sm btn-primary";
+            toggleBtn.textContent = t(entry.enabled ? "plugins_disable" : "plugins_enable");
+            toggleBtn.addEventListener("click", async () => {
+              const api = getApi();
+              if (!api || !api.set_plugin_enabled) return;
+              const res = await api.set_plugin_enabled(m.id, !entry.enabled);
+              showToast((res && res.message) || "OK");
+              await loadPluginsData(false);
+            });
+            side.appendChild(toggleBtn);
+
+            const cfgBtn = document.createElement("button");
+            cfgBtn.type = "button";
+            cfgBtn.className = "btn btn-sm";
+            cfgBtn.textContent = t("plugins_cfg");
+            cfgBtn.addEventListener("click", () => openPluginConfigModal(entry));
+            side.appendChild(cfgBtn);
+
+            if (m.diagnostic_check) {
+              const chkBtn = document.createElement("button");
+              chkBtn.type = "button";
+              chkBtn.className = "btn btn-sm";
+              chkBtn.textContent = t("plugins_check");
+              chkBtn.addEventListener("click", async () => {
+                const api = getApi();
+                if (!api || !api.run_plugin_check) return;
+                const res = await api.run_plugin_check(m.id);
+                showToast((res && res.message) || "OK");
+              });
+              side.appendChild(chkBtn);
+            }
+          }
+
+          const rmBtn = document.createElement("button");
+          rmBtn.type = "button";
+          rmBtn.className = "btn btn-sm btn-danger";
+          rmBtn.textContent = t("plugins_uninstall");
+          rmBtn.addEventListener("click", async () => {
+            const api = getApi();
+            if (!api || !api.uninstall_plugin) return;
+            const res = await api.uninstall_plugin(m.id, false);
+            showToast((res && res.message) || "OK");
+            await loadPluginsData(false);
+          });
+          side.appendChild(rmBtn);
+          card.appendChild(side);
+          instHost.appendChild(card);
+        });
+      }
+    }
+  }
+
+  async function loadPluginsData(withCatalog) {
+    const api = getApi();
+    if (!api) return;
+    const jobs = [
+      api.list_plugins ? api.list_plugins() : Promise.resolve([]),
+      api.get_plugin_badges ? api.get_plugin_badges() : Promise.resolve([]),
+      withCatalog && api.fetch_plugin_catalog ? api.fetch_plugin_catalog("") : Promise.resolve(state.pluginsCatalog),
+    ];
+    const [inst, badges, cat] = await Promise.all(jobs);
+    state.pluginsInstalled = Array.isArray(inst) ? inst : [];
+    state.pluginBadges = Array.isArray(badges) ? badges : [];
+    if (cat !== undefined && cat !== null) state.pluginsCatalog = cat;
+    renderPluginsView();
+    if (state.guideSteps && state.guideSteps.length) {
+      const activeRep = state.transport === "wireless" ? state.wirelessReport : state.report;
+      if (activeRep) updateWizardState(layerMapOf(activeRep), activeRep);
+    }
+  }
+
+  async function showPluginHooksOverview() {
+    const api = getApi();
+    if (!api || !api.get_plugin_sdk_info) return;
+    const info = await api.get_plugin_sdk_info();
+    const lines = [
+      `Schema: ${info.schema}`,
+      `Registry: ${info.active_registry_url}`,
+      "",
+      "Lifecycle Hooks (13):",
+      ...(info.hooks || []).map((h) => `  - ${h}`),
+      "",
+      "Supported Capabilities:",
+      "  " + (info.capabilities || []).join(", "),
+      "",
+      "Declarative Host Commands:",
+      "  " + (info.host_commands || []).join(", "),
+    ];
+    showDetailModal(t("plugins_hooks_title"), lines.join("\n"));
+  }
+
+  function toggleRecBackendRows(bk) {
+    const obsRow = document.getElementById("recObsRow");
+    const ffRow = document.getElementById("recFfmpegRow");
+    const cuRow = document.getElementById("recCustomRow");
+    const det = (state.recorderState && state.recorderState.detected) || {};
+    const eff = bk === "auto" ? (det.effective_backend || "obs") : bk;
+    if (obsRow) obsRow.style.display = (eff === "obs" || bk === "obs") ? "flex" : "none";
+    if (ffRow) ffRow.style.display = (eff === "ffmpeg" || bk === "ffmpeg") ? "flex" : "none";
+    if (cuRow) cuRow.style.display = (eff === "custom" || bk === "custom") ? "flex" : "none";
+    updateSplitRowVisibility();
+    updateLocalFilenamePreview();
+  }
+
+  function updateSplitRowVisibility() {
+    const modeSel = document.getElementById("recSplitMode");
+    const minWrap = document.getElementById("recSplitMinWrap");
+    const sizeWrap = document.getElementById("recSplitSizeWrap");
+    const fatBadge = document.getElementById("recSplitFat32Badge");
+    if (!modeSel || !minWrap || !sizeWrap) return;
+    const m = modeSel.value || "off";
+    minWrap.style.display = (m === "time" || m === "both") ? "inline-flex" : "none";
+    sizeWrap.style.display = (m === "size" || m === "both") ? "inline-flex" : "none";
+    const rs = state.recorderState || {};
+    const tgt = rs.target_status || {};
+    const eff = rs.effective_split || {};
+    if (fatBadge) {
+      const isFat = String(tgt.filesystem || "").toUpperCase() === "FAT32" || Boolean(eff.fat32_guarded);
+      fatBadge.style.display = isFat ? "inline-flex" : "none";
+    }
+  }
+
+  function sanitizeClientBody(raw) {
+    return String(raw || "")
+      .replace(/\{seq\}_*/gi, "")
+      .replace(/^\d+_+/, "")
+      .replace(/[<>:"/\\|?*\x00-\x1f]+/g, "_")
+      .replace(/\s+/g, "_")
+      .replace(/_+/g, "_")
+      .replace(/^[._\-\s]+|[._\-\s]+$/g, "")
+      .slice(0, 96);
+  }
+
+  function updateLocalFilenamePreview() {
+    const prevEl = document.getElementById("recFilenamePreview");
+    const tplIn = document.getElementById("recFilenameTemplate");
+    if (!prevEl || !tplIn) return;
+    const rs = state.recorderState || {};
+    const det = rs.detected || {};
+    const cfg = (state.appState && state.appState.config) || {};
+    const preset = cfg.active_preset || "xbox";
+    const bk = (document.getElementById("recBackendSelect") || {}).value || "auto";
+    const effBk = bk === "auto" ? (det.effective_backend || "obs") : bk;
+    const modeVal = (document.getElementById("recModeSelect") || {}).value || "replay";
+    const ext = effBk === "ffmpeg"
+      ? ((document.getElementById("recFfFormat") || {}).value || "mkv")
+      : ((det.obs && det.obs.record_format) || (document.getElementById("recFfFormat") || {}).value || "mkv");
+    const now = new Date();
+    const pad2 = (n) => String(n).padStart(2, "0");
+    const dStr = `${now.getFullYear()}${pad2(now.getMonth() + 1)}${pad2(now.getDate())}`;
+    const tStr = `${pad2(now.getHours())}${pad2(now.getMinutes())}${pad2(now.getSeconds())}`;
+    let tpl = (tplIn.value || "").trim() || "{preset}_{date}_{time}";
+    tpl = tpl
+      .replace(/\{preset\}/gi, preset)
+      .replace(/\{date\}/gi, dStr)
+      .replace(/\{time\}/gi, tStr)
+      .replace(/\{backend\}/gi, effBk)
+      .replace(/\{mode\}/gi, modeVal)
+      .replace(/\{orig\}/gi, "clip")
+      .replace(/\{[a-z0-9_]+\}/gi, "");
+    const body = sanitizeClientBody(tpl) || `${preset}_${dStr}_${tStr}`;
+    const clips = (rs.clips_summary && rs.clips_summary.clips) || [];
+    let maxSeq = 0;
+    clips.forEach((c) => { if (typeof c.seq === "number" && c.seq > maxSeq) maxSeq = c.seq; });
+    const n1 = maxSeq + 1;
+    const lockEl = document.querySelector(".rec-seq-lock");
+    if (lockEl) lockEl.textContent = `${n1}_`;
+    prevEl.textContent = `${n1}_${body}.${ext} · ${n1 + 1}_…`;
+  }
+
+  function formatDurationSec(sec) {
+    const s = Math.max(0, Math.floor(sec || 0));
+    const h = Math.floor(s / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    const r = s % 60;
+    const p = (v) => String(v).padStart(2, "0");
+    return h > 0 ? `${h}:${p(m)}:${p(r)}` : `${p(m)}:${p(r)}`;
+  }
+
+  function syncRecorderTelemetryPolling() {
+    const viewActive = Boolean(document.getElementById("viewRecorder") && document.getElementById("viewRecorder").classList.contains("active"));
+    const isRec = Boolean(state.recorderState && state.recorderState.is_recording);
+    if (viewActive && isRec) {
+      if (!state.recorderPollTimer) {
+        state.recorderPollTimer = setInterval(() => { loadRecorderData(); }, 2500);
+      }
+    } else if (state.recorderPollTimer) {
+      clearInterval(state.recorderPollTimer);
+      state.recorderPollTimer = null;
+    }
+  }
+
+  async function autoSaveRecorderSettings(extraPatch, toastOnSuccess) {
+    const api = getApi();
+    if (!api || !api.save_recorder_settings) return;
+    const patch = { ...collectRecorderSettingsPatch(), ...(extraPatch || {}) };
+    const r = await api.save_recorder_settings(patch);
+    if (toastOnSuccess) showToast((r && r.message) || t("toast_saved"));
+    await loadRecorderData();
+  }
+
+  function renderRecorderView() {
+    const rs = state.recorderState;
+    const ctrlPane = document.getElementById("recControlPane");
+    const storPane = document.getElementById("recStoragePane");
+    const clipPane = document.getElementById("recClipsPane");
+    const bC = document.getElementById("btnRecTabControl");
+    const bS = document.getElementById("btnRecTabStorage");
+    const bL = document.getElementById("btnRecTabClips");
+    if (ctrlPane && storPane && clipPane && bC && bS && bL) {
+      bC.classList.toggle("active", state.recorderTab === "control");
+      bS.classList.toggle("active", state.recorderTab === "storage");
+      bL.classList.toggle("active", state.recorderTab === "clips");
+      ctrlPane.style.display = state.recorderTab === "control" ? "flex" : "none";
+      storPane.style.display = state.recorderTab === "storage" ? "flex" : "none";
+      clipPane.style.display = state.recorderTab === "clips" ? "flex" : "none";
+    }
+    if (!rs) return;
+
+    const rec = rs.recorder || {};
+    const det = rs.detected || {};
+    const tgt = rs.target_status || {};
+    const rt = rs.runtime_status || {};
+    const effSplit = rs.effective_split || {};
+    const isRec = Boolean(rs.is_recording);
+
+    const led = document.getElementById("recLed");
+    const dot = document.getElementById("recDot");
+    const titleEl = document.getElementById("recStatusTitle");
+    const metaEl = document.getElementById("recStatusMeta");
+    const toggleBtn = document.getElementById("btnRecToggle");
+    if (led) led.className = "status-led " + (isRec ? "ok" : "idle");
+    if (dot) dot.classList.toggle("show", isRec || Boolean(rec.auto_link_quick_play));
+    if (titleEl) titleEl.textContent = t(isRec ? "rec_status_active" : "rec_status_idle");
+    if (toggleBtn) {
+      toggleBtn.textContent = t(isRec ? "rec_btn_stop" : "rec_btn_start");
+      toggleBtn.className = isRec ? "btn btn-sm btn-danger" : "btn btn-sm btn-primary";
+    }
+    const splitNowBtn = document.getElementById("btnRecSplitNow");
+    if (splitNowBtn) splitNowBtn.style.display = isRec ? "inline-flex" : "none";
+    if (metaEl) {
+      if (isRec) {
+        const segNum = rt.current_segment || 1;
+        const durTxt = formatDurationSec(rt.segment_elapsed_sec || rt.elapsed_sec || 0);
+        const mbTxt = rt.current_size_mb > 0 ? ` · ${rt.current_size_mb} MB` : "";
+        const fbTxt = rt.used_fallback ? ` · [${t("rec_using_fallback")}]` : "";
+        metaEl.textContent = `#${segNum} · ${durTxt}${mbTxt}${fbTxt} · ${(det.effective_backend || rec.backend || "auto").toUpperCase()}`;
+      } else {
+        const targetTxt = tgt.configured
+          ? (tgt.online ? `${tgt.path} (${tgt.filesystem || ""} · ${tgt.free_gb} GB · ~${tgt.est_hours}h)` : `${tgt.path} [OFFLINE]`)
+          : t("rec_target_unset");
+        let splitTxt = "";
+        if (effSplit.mode === "time") splitTxt = ` · ${effSplit.split_minutes}m`;
+        else if (effSplit.mode === "size") splitTxt = ` · ${effSplit.split_size_mb}MB`;
+        else if (effSplit.mode === "both") splitTxt = ` · ${effSplit.split_minutes}m/${effSplit.split_size_mb}MB`;
+        metaEl.textContent = `${(det.effective_backend || rec.backend || "auto").toUpperCase()} | ${targetTxt}${splitTxt}`;
+      }
+    }
+
+    const bkBadge = document.getElementById("recBackendBadge");
+    if (bkBadge) bkBadge.textContent = (det.effective_backend || "auto").toUpperCase();
+    const bkSel = document.getElementById("recBackendSelect");
+    if (bkSel) bkSel.value = rec.backend || "auto";
+    document.getElementById("recModeSelect").value = rec.mode || "replay";
+    document.getElementById("recAutoLink").checked = Boolean(rec.auto_link_quick_play);
+    document.getElementById("recSplitMode").value = rec.split_mode || "off";
+    document.getElementById("recSplitMinutes").value = String(rec.split_minutes || 30);
+    document.getElementById("recSplitSizeMb").value = String(rec.split_size_mb || 2048);
+    document.getElementById("recFilenameTemplate").value = rec.filename_template || "{preset}_{date}_{time}";
+    document.getElementById("recFfFormat").value = rec.ffmpeg_format || "mkv";
+    document.getElementById("recFfEncoder").value = rec.ffmpeg_encoder || "auto";
+    const ffAudioEl = document.getElementById("recFfAudio");
+    if (ffAudioEl) ffAudioEl.value = rec.ffmpeg_audio_device || "";
+    document.getElementById("recFfBitrate").value = String(rec.ffmpeg_bitrate_mbps || 10);
+    document.getElementById("recFfExe").value = rec.ffmpeg_exe_path || ((det.ffmpeg && det.ffmpeg.exe_path) || "");
+    document.getElementById("recCustomExe").value = rec.custom_exe_path || "";
+    document.getElementById("recHotkeyRecord").value = rec.hotkey_record || "";
+    document.getElementById("recHotkeyReplay").value = rec.hotkey_replay || "";
+    document.getElementById("recOutputDir").value = rec.output_dir || "";
+    document.getElementById("recFallbackDir").value = rec.fallback_dir || "";
+    document.getElementById("recAutoOffload").checked = rec.auto_offload !== false;
+    document.getElementById("recApplyNamingOnOffload").checked = rec.apply_naming_on_offload !== false;
+    document.getElementById("recAutoPrune").checked = Boolean(rec.auto_prune);
+    document.getElementById("recMaxGb").value = String(rec.max_storage_gb || 0);
+
+    const migBtn = document.getElementById("btnRecMigrateFallback");
+    if (migBtn) {
+      const pendingFb = Number(rs.fallback_pending_count || 0);
+      if (pendingFb > 0 && tgt.online) {
+        migBtn.style.display = "inline-flex";
+        migBtn.textContent = `${t("rec_btn_migrate_fb")} (${pendingFb})`;
+      } else {
+        migBtn.style.display = "none";
+      }
+    }
+
+    const obsMeta = document.getElementById("recObsMeta");
+    const obsWarn = document.getElementById("recObsSyncWarn");
+    if (obsMeta) {
+      const obs = det.obs || {};
+      if (obs.installed) {
+        const sp = obs.split_enabled ? ` · split:${obs.split_type || "On"}` : "";
+        obsMeta.textContent = `${obs.profile_name || "Default"} [${obs.record_format || "native"}${sp}] → ${obs.record_path || "-"}`;
+        if (obsWarn) {
+          const norm = (s) => String(s || "").trim().replace(/[\\/]+$/, "").toLowerCase();
+          const needSync = Boolean(rec.output_dir && obs.record_path && norm(rec.output_dir) !== norm(obs.record_path));
+          obsWarn.style.display = needSync ? "inline-flex" : "none";
+        }
+      } else {
+        obsMeta.textContent = t("rec_obs_missing");
+        if (obsWarn) obsWarn.style.display = "none";
+      }
+    }
+    toggleRecBackendRows(rec.backend || "auto");
+    syncRecorderTelemetryPolling();
+
+    // Drives list
+    const drivesHost = document.getElementById("recDrivesList");
+    if (drivesHost) {
+      drivesHost.innerHTML = "";
+      (rs.drives || []).forEach((d) => {
+        const row = document.createElement("div");
+        row.className = "rec-drive-row";
+        const warnTxt = d.supports_large_files ? "" : ` · ⚠ ${t("rec_fat32_warn")}`;
+        const descTxt = t("rec_drive_meta")
+          .replace("{type}", d.drive_type_label || "")
+          .replace("{free}", String(d.free_gb))
+          .replace("{total}", String(d.total_gb))
+          .replace("{hours}", String(d.est_hours));
+        row.innerHTML = `
+          <div class="list-row-col">
+            <div class="row-head">
+              <span class="mono">${escapeHtml(d.device_id)}</span> ${escapeHtml(d.volume_name || d.drive_type_label)}
+              <span class="ext-tag">${escapeHtml(d.filesystem)}</span>
+              ${d.recommended ? `<span class="sev-text ok">● ${escapeHtml(t("rec_drive_rec"))}</span>` : ""}
+            </div>
+            <div class="row-desc">${escapeHtml(descTxt)}${escapeHtml(warnTxt)}</div>
+          </div>
+        `;
+        const useBtn = document.createElement("button");
+        useBtn.type = "button";
+        useBtn.className = d.recommended ? "btn btn-sm btn-primary" : "btn btn-sm";
+        useBtn.textContent = t("rec_btn_use_drive");
+        useBtn.addEventListener("click", async () => {
+          const api = getApi();
+          if (!api || !api.save_recorder_settings) return;
+          const nextDir = `${d.device_id}\\WireDeckClips`;
+          document.getElementById("recOutputDir").value = nextDir;
+          const patch = { output_dir: nextDir };
+          if (!d.supports_large_files) {
+            const curSplit = document.getElementById("recSplitMode").value || "off";
+            const curMb = parseInt(document.getElementById("recSplitSizeMb").value, 10) || 2048;
+            if (curSplit === "off") patch.split_mode = "size";
+            else if (curSplit === "time") patch.split_mode = "both";
+            if (curMb > 3800) patch.split_size_mb = 3800;
+            else if (curSplit === "off" || curSplit === "time") patch.split_size_mb = Math.min(curMb, 3800);
+          }
+          const r = await api.save_recorder_settings(patch);
+          showToast(!d.supports_large_files ? t("rec_toast_fat32_cap") : ((r && r.message) || t("toast_saved")));
+          await loadRecorderData();
+        });
+        row.appendChild(useBtn);
+        drivesHost.appendChild(row);
+      });
+    }
+
+    // Clips library
+    const summaryEl = document.getElementById("recClipsSummary");
+    const clipsData = rs.clips_summary || { clips: [], total_count: 0, total_gb: 0 };
+    if (summaryEl) {
+      summaryEl.textContent = t("rec_clips_count")
+        .replace("{count}", String(clipsData.total_count || 0))
+        .replace("{gb}", String(clipsData.total_gb || 0));
+    }
+    const clipsHost = document.getElementById("recClipsList");
+    if (clipsHost) {
+      clipsHost.innerHTML = "";
+      const clips = clipsData.clips || [];
+      if (!clips.length) {
+        clipsHost.innerHTML = `<div class="list-row"><span class="row-desc">${escapeHtml(t("rec_clips_empty"))}</span></div>`;
+      } else {
+        clips.forEach((c) => {
+          const row = document.createElement("div");
+          row.className = "rec-clip-row";
+          const seqBadge = c.seq > 0 ? `<span class="ext-tag mono">#${c.seq}</span>` : "";
+          row.innerHTML = `
+            <div class="list-row-col">
+              <div class="row-head">${seqBadge}<span class="ext-tag">${escapeHtml(String(c.ext || "").toUpperCase())}</span> ${escapeHtml(c.name)}</div>
+              <div class="row-desc mono">${c.size_mb} MB · ${escapeHtml(c.mtime_iso || "")}</div>
+            </div>
+          `;
+          const acts = document.createElement("div");
+          acts.className = "row-actions";
+          const playBtn = document.createElement("button");
+          playBtn.type = "button";
+          playBtn.className = "btn btn-sm btn-primary";
+          playBtn.textContent = t("rec_clip_play");
+          playBtn.addEventListener("click", () => getApi() && getApi().recorder_open_clip(c.path));
+          acts.appendChild(playBtn);
+
+          const renBtn = document.createElement("button");
+          renBtn.type = "button";
+          renBtn.className = "btn btn-sm";
+          renBtn.textContent = t("rec_clip_rename");
+          renBtn.addEventListener("click", () => {
+            state.activeRenameClip = c;
+            const seqNum = c.seq > 0 ? c.seq : 1;
+            const dotIdx = c.name.lastIndexOf(".");
+            const stem = dotIdx > 0 ? c.name.slice(0, dotIdx) : c.name;
+            const extStr = dotIdx > 0 ? c.name.slice(dotIdx) : `.${c.ext || "mkv"}`;
+            const body = stem.replace(/^\d+_/, "");
+            document.getElementById("renameClipSeqPrefix").textContent = `${seqNum}_`;
+            document.getElementById("renameClipInput").value = body;
+            document.getElementById("renameClipExt").textContent = extStr;
+            document.getElementById("renameClipModal").classList.add("open");
+            document.getElementById("renameClipInput").focus();
+          });
+          acts.appendChild(renBtn);
+
+          const revBtn = document.createElement("button");
+          revBtn.type = "button";
+          revBtn.className = "btn btn-sm";
+          revBtn.textContent = t("rec_clip_reveal");
+          revBtn.addEventListener("click", () => getApi() && getApi().recorder_reveal_clip(c.path));
+          acts.appendChild(revBtn);
+
+          const delBtn = document.createElement("button");
+          delBtn.type = "button";
+          delBtn.className = "btn btn-sm btn-danger";
+          delBtn.textContent = t("rec_clip_del");
+          delBtn.addEventListener("click", async () => {
+            const api = getApi();
+            if (!api || !api.recorder_delete_clip) return;
+            const res = await api.recorder_delete_clip(c.path);
+            showToast((res && res.message) || "OK");
+            await loadRecorderData();
+          });
+          acts.appendChild(delBtn);
+
+          row.appendChild(acts);
+          clipsHost.appendChild(row);
+        });
+      }
+    }
+  }
+
+  function collectRecorderSettingsPatch() {
+    return {
+      backend: document.getElementById("recBackendSelect").value,
+      mode: document.getElementById("recModeSelect").value,
+      auto_link_quick_play: Boolean(document.getElementById("recAutoLink").checked),
+      split_mode: document.getElementById("recSplitMode").value,
+      split_minutes: parseInt(document.getElementById("recSplitMinutes").value, 10) || 30,
+      split_size_mb: parseInt(document.getElementById("recSplitSizeMb").value, 10) || 2048,
+      filename_template: (document.getElementById("recFilenameTemplate").value || "").trim(),
+      ffmpeg_format: document.getElementById("recFfFormat").value,
+      ffmpeg_encoder: document.getElementById("recFfEncoder").value,
+      ffmpeg_audio_device: (document.getElementById("recFfAudio") || {}).value || "",
+      ffmpeg_bitrate_mbps: parseInt(document.getElementById("recFfBitrate").value, 10) || 10,
+      ffmpeg_exe_path: document.getElementById("recFfExe").value.trim(),
+      custom_exe_path: document.getElementById("recCustomExe").value.trim(),
+      hotkey_record: document.getElementById("recHotkeyRecord").value.trim(),
+      hotkey_replay: document.getElementById("recHotkeyReplay").value.trim(),
+      output_dir: document.getElementById("recOutputDir").value.trim(),
+      fallback_dir: document.getElementById("recFallbackDir").value.trim(),
+      auto_offload: Boolean(document.getElementById("recAutoOffload").checked),
+      apply_naming_on_offload: Boolean(document.getElementById("recApplyNamingOnOffload").checked),
+      auto_prune: Boolean(document.getElementById("recAutoPrune").checked),
+      max_storage_gb: parseFloat(document.getElementById("recMaxGb").value) || 0,
+    };
+  }
+
+  async function loadRecorderData() {
+    const api = getApi();
+    if (!api || !api.get_recorder_state) return;
+    state.recorderState = await api.get_recorder_state();
+    renderRecorderView();
   }
 
   async function refreshAll(silent) {
@@ -1865,15 +2835,29 @@
         ? "wireless"
         : (st.preview_view === "home" ? "wired" : state.transport);
       const wantHotspotCreds = activeT === "wireless" && (state.wirelessSubmode === "hotspot" || !state.hotspotCreds);
+      const activeViewPlugins = document.getElementById("viewPlugins") && document.getElementById("viewPlugins").classList.contains("active");
+      const activeViewRecorder = document.getElementById("viewRecorder") && document.getElementById("viewRecorder").classList.contains("active");
+      const wantCatalog = Boolean(st.preview_view === "plugins" || activeViewPlugins);
+      const wantRecorder = Boolean(st.preview_view === "recorder" || activeViewRecorder);
       const tasks = [
         activeT === "wired" ? api.diagnose() : Promise.resolve(null),
         activeT === "wireless" && api.diagnose_wireless ? api.diagnose_wireless() : Promise.resolve(null),
         wantHotspotCreds && api.get_hotspot_credentials ? api.get_hotspot_credentials() : Promise.resolve(null),
         api.list_extensions(),
         api.list_toolkits ? api.list_toolkits() : Promise.resolve([]),
+        api.list_plugins ? api.list_plugins() : Promise.resolve([]),
+        api.get_plugin_badges ? api.get_plugin_badges() : Promise.resolve([]),
+        wantCatalog && api.fetch_plugin_catalog ? api.fetch_plugin_catalog("") : Promise.resolve(null),
+        wantRecorder && api.get_recorder_state ? api.get_recorder_state() : Promise.resolve(null),
+        api.get_system_health ? api.get_system_health() : Promise.resolve(null),
       ];
-      const [rep, wRep, creds, exts, tools] = await Promise.all(tasks);
+      const [rep, wRep, creds, exts, tools, plgInst, plgBadges, plgCat, recSt, sysHealth] = await Promise.all(tasks);
       if (creds && creds.ok) state.hotspotCreds = creds;
+      if (Array.isArray(plgInst)) state.pluginsInstalled = plgInst;
+      if (Array.isArray(plgBadges)) state.pluginBadges = plgBadges;
+      if (plgCat) state.pluginsCatalog = plgCat;
+      if (recSt && recSt.ok) state.recorderState = recSt;
+      renderSystemHealthBadge(sysHealth);
       if (rep) {
         state.wiredStale = false;
         renderReport(rep);
@@ -1884,6 +2868,8 @@
       }
       renderExtensions(exts);
       renderToolkits(tools);
+      renderPluginsView();
+      renderRecorderView();
 
       if (!refreshAll._initialRouted) {
         refreshAll._initialRouted = true;
@@ -1952,6 +2938,8 @@
       btn.addEventListener("click", () => switchView(btn.getAttribute("data-nav"), false));
     });
     document.getElementById("sbProfile").addEventListener("click", () => switchView("settings", true));
+    const sbHealthBtn = document.getElementById("sbHealthBtn");
+    if (sbHealthBtn) sbHealthBtn.addEventListener("click", openSystemHealthModal);
 
     document.getElementById("btnRefresh").addEventListener("click", () => refreshAll(false));
     document.getElementById("btnWRefresh").addEventListener("click", () => refreshAll(false));
@@ -2106,6 +3094,231 @@
     document.getElementById("btnGuideRecheck").addEventListener("click", () => refreshAll(false));
 
     document.getElementById("btnOpenExtFolder").addEventListener("click", () => getApi() && getApi().open_folder("extensions"));
+    document.getElementById("btnOpenPluginsFolder").addEventListener("click", () => getApi() && getApi().open_folder("plugins"));
+
+    // Recorder view controls & smooth auto-save
+    document.getElementById("btnRecTabControl").addEventListener("click", () => { state.recorderTab = "control"; renderRecorderView(); });
+    document.getElementById("btnRecTabStorage").addEventListener("click", () => { state.recorderTab = "storage"; renderRecorderView(); });
+    document.getElementById("btnRecTabClips").addEventListener("click", async () => { state.recorderTab = "clips"; await loadRecorderData(); });
+    document.getElementById("btnRecRefresh").addEventListener("click", async () => { await loadRecorderData(); showToast(t("toast_refreshed")); });
+    document.getElementById("recBackendSelect").addEventListener("change", (e) => { toggleRecBackendRows(e.target.value); autoSaveRecorderSettings({}, false); });
+    document.getElementById("recModeSelect").addEventListener("change", () => autoSaveRecorderSettings({}, false));
+    document.getElementById("recAutoLink").addEventListener("change", () => autoSaveRecorderSettings({}, false));
+    document.getElementById("recSplitMode").addEventListener("change", () => { updateSplitRowVisibility(); autoSaveRecorderSettings({}, false); });
+    document.getElementById("recSplitMinutes").addEventListener("change", () => autoSaveRecorderSettings({}, false));
+    document.getElementById("recSplitSizeMb").addEventListener("change", () => autoSaveRecorderSettings({}, false));
+    document.getElementById("recFfFormat").addEventListener("change", () => { updateLocalFilenamePreview(); autoSaveRecorderSettings({}, false); });
+    document.getElementById("recFfEncoder").addEventListener("change", () => autoSaveRecorderSettings({}, false));
+    const ffAudioSel = document.getElementById("recFfAudio");
+    if (ffAudioSel) ffAudioSel.addEventListener("change", () => autoSaveRecorderSettings({}, false));
+    document.getElementById("recAutoOffload").addEventListener("change", () => autoSaveRecorderSettings({}, false));
+    document.getElementById("recApplyNamingOnOffload").addEventListener("change", () => autoSaveRecorderSettings({}, false));
+    document.getElementById("recAutoPrune").addEventListener("change", () => autoSaveRecorderSettings({}, false));
+    document.getElementById("recFilenameTemplate").addEventListener("input", updateLocalFilenamePreview);
+    document.getElementById("recFilenameTemplate").addEventListener("change", () => autoSaveRecorderSettings({}, false));
+    document.querySelectorAll("[data-rec-token]").forEach((chip) => {
+      chip.addEventListener("click", () => {
+        const tok = chip.getAttribute("data-rec-token") || "";
+        const inp = document.getElementById("recFilenameTemplate");
+        if (!inp || !tok) return;
+        const cur = inp.value.trim();
+        inp.value = cur ? (cur.endsWith("_") ? `${cur}${tok}` : `${cur}_${tok}`) : tok;
+        updateLocalFilenamePreview();
+        autoSaveRecorderSettings({}, false);
+      });
+    });
+    document.getElementById("btnRecToggle").addEventListener("click", async () => {
+      const api = getApi();
+      if (!api) return;
+      const isRec = Boolean(state.recorderState && state.recorderState.is_recording);
+      if (!isRec) await autoSaveRecorderSettings({}, false);
+      const res = isRec ? await api.recorder_stop() : await api.recorder_start();
+      showToast((res && res.message) || "OK");
+      await loadRecorderData();
+    });
+    const splitBtn = document.getElementById("btnRecSplitNow");
+    if (splitBtn) {
+      splitBtn.addEventListener("click", async () => {
+        const api = getApi();
+        if (!api || !api.recorder_split_now) return;
+        const res = await api.recorder_split_now();
+        showToast((res && res.message) || "OK");
+        await loadRecorderData();
+      });
+    }
+    document.getElementById("btnRecReplay").addEventListener("click", async () => {
+      const api = getApi();
+      if (!api || !api.recorder_save_replay) return;
+      const res = await api.recorder_save_replay();
+      showToast((res && res.message) || "OK");
+    });
+    document.getElementById("btnRecOpenDir").addEventListener("click", () => getApi() && getApi().open_folder("recorder"));
+    document.getElementById("btnRecSyncObs").addEventListener("click", async () => {
+      const api = getApi();
+      if (!api || !api.recorder_sync_obs_path) return;
+      await api.save_recorder_settings(collectRecorderSettingsPatch());
+      const res = await api.recorder_sync_obs_path();
+      showToast((res && res.message) || "OK");
+      await loadRecorderData();
+    });
+    const saveRecFn = async () => {
+      const api = getApi();
+      if (!api || !api.save_recorder_settings) return;
+      const res = await api.save_recorder_settings(collectRecorderSettingsPatch());
+      showToast((res && res.message) || t("toast_saved"));
+      await loadRecorderData();
+    };
+    document.getElementById("btnRecSaveControl").addEventListener("click", saveRecFn);
+    document.getElementById("btnRecSaveStorage").addEventListener("click", saveRecFn);
+    document.getElementById("btnRecBrowseDir").addEventListener("click", async () => {
+      const api = getApi();
+      if (!api || !api.pick_recorder_folder) return;
+      const picked = await api.pick_recorder_folder();
+      if (picked && picked.ok && picked.path) {
+        document.getElementById("recOutputDir").value = picked.path;
+        await autoSaveRecorderSettings({ output_dir: picked.path }, true);
+      }
+    });
+    document.getElementById("btnRecBrowseFallback").addEventListener("click", async () => {
+      const api = getApi();
+      if (!api || !api.pick_recorder_folder) return;
+      const picked = await api.pick_recorder_folder();
+      if (picked && picked.ok && picked.path) {
+        document.getElementById("recFallbackDir").value = picked.path;
+        await autoSaveRecorderSettings({ fallback_dir: picked.path }, true);
+      }
+    });
+    document.getElementById("btnRecMigrateFallback").addEventListener("click", async () => {
+      const api = getApi();
+      if (!api || !api.recorder_migrate_fallback) return;
+      showToast(t("toast_working"));
+      const res = await api.recorder_migrate_fallback();
+      showToast((res && res.message) || "OK");
+      await loadRecorderData();
+    });
+    document.getElementById("btnRenameClipCancel").addEventListener("click", () => {
+      document.getElementById("renameClipModal").classList.remove("open");
+      state.activeRenameClip = null;
+    });
+    const submitRenameFn = async () => {
+      const api = getApi();
+      const clip = state.activeRenameClip;
+      if (!api || !api.recorder_rename_clip || !clip) return;
+      const newBody = (document.getElementById("renameClipInput").value || "").trim();
+      const res = await api.recorder_rename_clip(clip.path, newBody);
+      showToast((res && res.message) || "OK");
+      if (res && res.ok) {
+        document.getElementById("renameClipModal").classList.remove("open");
+        state.activeRenameClip = null;
+        await loadRecorderData();
+      }
+    };
+    document.getElementById("btnRenameClipOk").addEventListener("click", submitRenameFn);
+    document.getElementById("renameClipInput").addEventListener("keydown", (e) => {
+      if (e.key === "Enter") { e.preventDefault(); submitRenameFn(); }
+    });
+    document.getElementById("btnRecPickFf").addEventListener("click", async () => {
+      const api = getApi();
+      if (!api || !api.pick_recorder_exe) return;
+      const picked = await api.pick_recorder_exe("ffmpeg");
+      if (picked && picked.ok && picked.path) document.getElementById("recFfExe").value = picked.path;
+    });
+    document.getElementById("btnRecPickCustom").addEventListener("click", async () => {
+      const api = getApi();
+      if (!api || !api.pick_recorder_exe) return;
+      const picked = await api.pick_recorder_exe("custom");
+      if (picked && picked.ok && picked.path) document.getElementById("recCustomExe").value = picked.path;
+    });
+    document.getElementById("btnRecOffloadNow").addEventListener("click", async () => {
+      const api = getApi();
+      if (!api || !api.recorder_offload_now) return;
+      await api.save_recorder_settings(collectRecorderSettingsPatch());
+      const res = await api.recorder_offload_now();
+      showToast((res && res.message) || "OK");
+      await loadRecorderData();
+    });
+    document.getElementById("btnRecPruneNow").addEventListener("click", async () => {
+      const api = getApi();
+      if (!api || !api.recorder_prune_now) return;
+      await api.save_recorder_settings(collectRecorderSettingsPatch());
+      const res = await api.recorder_prune_now();
+      showToast((res && res.message) || "OK");
+      await loadRecorderData();
+    });
+    document.getElementById("btnPluginTabCatalog").addEventListener("click", () => {
+      state.pluginsTab = "catalog";
+      renderPluginsView();
+      if (!state.pluginsCatalog) loadPluginsData(true);
+    });
+    document.getElementById("btnPluginTabInstalled").addEventListener("click", () => {
+      state.pluginsTab = "installed";
+      renderPluginsView();
+    });
+    document.getElementById("btnPluginsRefresh").addEventListener("click", async () => {
+      await loadPluginsData(true);
+      showToast(t("toast_refreshed"));
+    });
+    document.querySelectorAll("#pluginCatBar .cat-chip").forEach((chip) => {
+      chip.addEventListener("click", () => {
+        state.pluginsCategory = chip.getAttribute("data-cat") || "all";
+        renderPluginsView();
+      });
+    });
+    document.getElementById("btnInstallDirectUrl").addEventListener("click", async () => {
+      const api = getApi();
+      const inp = document.getElementById("pluginDirectUrlInput");
+      const val = (inp && inp.value || "").trim();
+      if (!api || !api.install_plugin || !val) return;
+      showToast(t("toast_working"));
+      const res = await api.install_plugin("", val);
+      showToast((res && res.message) || "OK");
+      if (res && res.ok) {
+        inp.value = "";
+        state.pluginsTab = "installed";
+        await loadPluginsData(false);
+      }
+    });
+    document.getElementById("btnPluginHooksOverview").addEventListener("click", showPluginHooksOverview);
+    document.getElementById("btnPluginCfgCancel").addEventListener("click", () => {
+      document.getElementById("pluginConfigModal").classList.remove("open");
+      state.activePluginConfig = null;
+    });
+    document.getElementById("btnPluginCfgSave").addEventListener("click", async () => {
+      const api = getApi();
+      const entry = state.activePluginConfig;
+      if (!api || !api.save_plugin_settings || !entry || !entry.manifest) return;
+      const patch = collectPluginFormSettings(entry.manifest);
+      const res = await api.save_plugin_settings(entry.manifest.id, patch);
+      document.getElementById("pluginConfigModal").classList.remove("open");
+      state.activePluginConfig = null;
+      showToast((res && res.message) || t("toast_saved"));
+      await loadPluginsData(false);
+    });
+    document.getElementById("btnPluginRegistryCfg").addEventListener("click", () => {
+      const cfg = (state.appState && state.appState.config) || {};
+      document.getElementById("pluginRegistryInput").value = cfg.plugin_registry_url || "";
+      document.getElementById("pluginRegistryModal").classList.add("open");
+    });
+    document.getElementById("btnPluginRegCancel").addEventListener("click", () => {
+      document.getElementById("pluginRegistryModal").classList.remove("open");
+    });
+    document.getElementById("btnPluginRegReset").addEventListener("click", async () => {
+      const api = getApi();
+      if (!api || !api.set_plugin_registry_url) return;
+      await api.set_plugin_registry_url("");
+      document.getElementById("pluginRegistryModal").classList.remove("open");
+      await loadPluginsData(true);
+      showToast(t("toast_saved"));
+    });
+    document.getElementById("btnPluginRegSave").addEventListener("click", async () => {
+      const api = getApi();
+      if (!api || !api.set_plugin_registry_url) return;
+      const url = document.getElementById("pluginRegistryInput").value.trim();
+      await api.set_plugin_registry_url(url);
+      document.getElementById("pluginRegistryModal").classList.remove("open");
+      await loadPluginsData(true);
+      showToast(t("toast_saved"));
+    });
     document.getElementById("btnOpenLogs").addEventListener("click", () => getApi() && getApi().open_folder("logs"));
     document.getElementById("btnOpenData").addEventListener("click", () => getApi() && getApi().open_folder("data"));
     document.getElementById("btnRerunOnboarding").addEventListener("click", () => {
@@ -2205,6 +3418,8 @@
         ethernet_interface: document.getElementById("setEth").value,
         wifi_interface: document.getElementById("setWifi").value,
         hotspot_prefer_5ghz: Boolean(document.getElementById("setHotspot5G").checked),
+        keep_awake_during_stream: Boolean(document.getElementById("setKeepAwake") ? document.getElementById("setKeepAwake").checked : true),
+        auto_restore_on_exit: Boolean(document.getElementById("setAutoRestoreExit") ? document.getElementById("setAutoRestoreExit").checked : false),
         host_ip: document.getElementById("setHostIp").value.trim(),
         peer_ip: document.getElementById("setPeerIp").value.trim(),
         dns_servers: document.getElementById("setDns").value.trim(),

@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 import urllib.error
@@ -23,6 +24,7 @@ from wiredeck.probes import (
     detect_local_xstreaming_path,
 )
 from wiredeck.ps_runner import CREATE_NO_WINDOW, PsResult, run_powershell
+from wiredeck.version import APP_VERSION
 
 XSTREAMING_API_URL = "https://api.github.com/repos/Geocld/XStreamingDesktop/releases/latest"
 XSTREAMING_RELEASES_URL = "https://github.com/Geocld/XStreamingDesktop/releases/latest"
@@ -71,7 +73,7 @@ def fetch_latest_xstreaming_release(
         XSTREAMING_API_URL,
         headers={
             "Accept": "application/vnd.github+json",
-            "User-Agent": "WireDeck/0.1.0",
+            "User-Agent": f"WireDeck/{APP_VERSION}",
         },
     )
     try:
@@ -146,7 +148,7 @@ def download_and_verify_asset(
     dest.parent.mkdir(parents=True, exist_ok=True)
     part_path = dest.with_suffix(dest.suffix + ".part")
 
-    req = urllib.request.Request(url, headers={"User-Agent": "WireDeck/0.1.0"})
+    req = urllib.request.Request(url, headers={"User-Agent": f"WireDeck/{APP_VERSION}"})
     hasher = hashlib.sha256()
     downloaded = 0
 
@@ -190,17 +192,61 @@ def hash_file_sha256(path: Path) -> str:
     return h.hexdigest().lower()
 
 
+def resolve_stream_client_info(
+    preset_id: str,
+    custom_path: str = "",
+    clients: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Resolve target app display name, executable path, and native Windows icon location."""
+    custom = (custom_path or "").strip()
+    if custom and Path(custom).is_file():
+        return {
+            "name": Path(custom).stem,
+            "exe_path": custom,
+            "icon_location": f"{custom},0",
+            "is_custom": True,
+        }
+
+    pid = normalize_preset_id(preset_id)
+    detected = clients if clients is not None else detect_stream_clients()
+
+    candidates: dict[str, list[tuple[str, str]]] = {
+        "xbox": [("xstreaming_path", "XStreaming")],
+        "playstation": [("chiaki_path", "Chiaki-ng"), ("ps_remote_path", "PS Remote Play")],
+        "handheld": [("moonlight_path", "Moonlight"), ("steam_path", "Steam"), ("sunshine_path", "Sunshine")],
+    }
+    for key, label in candidates.get(pid, []):
+        raw_path = str(detected.get(key) or "").strip()
+        if raw_path and Path(raw_path).is_file():
+            return {
+                "name": Path(raw_path).stem if key == "xstreaming_path" and "xstreaming" in Path(raw_path).stem.lower() else label,
+                "exe_path": raw_path,
+                "icon_location": f"{raw_path},0",
+                "is_custom": False,
+            }
+    if pid == "xbox" and detected.get("xbox_app_installed"):
+        return {"name": "Xbox", "exe_path": "", "icon_location": "", "is_custom": False}
+
+    return {"name": "", "exe_path": "", "icon_location": "", "is_custom": False}
+
+
 def launch_stream_client(prefer: str = "auto", preset_id: str = "xbox", custom_path: str = "") -> ActionResult:
     """Launch installed streaming client matching the active device preset (custom_path takes priority)."""
     custom = custom_path.strip()
     if custom and Path(custom).is_file():
         try:
-            subprocess.Popen([custom], cwd=str(Path(custom).parent))
+            proc = subprocess.Popen([custom], cwd=str(Path(custom).parent))
             return ActionResult(
                 ok=True,
                 code="LAUNCHED",
                 message=f"已启动 {Path(custom).stem}",
-                details={"path": custom, "custom": True},
+                details={
+                    "path": custom,
+                    "exe_name": Path(custom).name,
+                    "client_name": Path(custom).stem,
+                    "pid": getattr(proc, "pid", 0),
+                    "custom": True,
+                },
             )
         except Exception as exc:
             return ActionResult(
@@ -218,8 +264,18 @@ def launch_stream_client(prefer: str = "auto", preset_id: str = "xbox", custom_p
             path = clients.get(key)
             if path:
                 try:
-                    subprocess.Popen([path], cwd=str(Path(path).parent))
-                    return ActionResult(ok=True, code="LAUNCHED", message=f"已启动 {label}", details={"path": path})
+                    proc = subprocess.Popen([path], cwd=str(Path(path).parent))
+                    return ActionResult(
+                        ok=True,
+                        code="LAUNCHED",
+                        message=f"已启动 {label}",
+                        details={
+                            "path": path,
+                            "exe_name": Path(path).name,
+                            "client_name": label,
+                            "pid": getattr(proc, "pid", 0),
+                        },
+                    )
                 except Exception as exc:
                     return ActionResult(ok=False, code="LAUNCH_FAILED", message=f"启动 {label} 失败: {exc}", exit_code=1)
         return ActionResult(
@@ -234,8 +290,18 @@ def launch_stream_client(prefer: str = "auto", preset_id: str = "xbox", custom_p
             path = clients.get(key)
             if path:
                 try:
-                    subprocess.Popen([path], cwd=str(Path(path).parent))
-                    return ActionResult(ok=True, code="LAUNCHED", message=f"已启动 {label}", details={"path": path})
+                    proc = subprocess.Popen([path], cwd=str(Path(path).parent))
+                    return ActionResult(
+                        ok=True,
+                        code="LAUNCHED",
+                        message=f"已启动 {label}",
+                        details={
+                            "path": path,
+                            "exe_name": Path(path).name,
+                            "client_name": label,
+                            "pid": getattr(proc, "pid", 0),
+                        },
+                    )
                 except Exception as exc:
                     return ActionResult(ok=False, code="LAUNCH_FAILED", message=f"启动 {label} 失败: {exc}", exit_code=1)
         return ActionResult(
@@ -259,19 +325,34 @@ def launch_stream_client(prefer: str = "auto", preset_id: str = "xbox", custom_p
 
     if prefer in ("auto", "xstreaming") and xs:
         try:
-            subprocess.Popen([xs], cwd=str(Path(xs).parent))
-            return ActionResult(ok=True, code="LAUNCHED", message="已启动 XStreaming", details={"path": xs})
+            proc = subprocess.Popen([xs], cwd=str(Path(xs).parent))
+            return ActionResult(
+                ok=True,
+                code="LAUNCHED",
+                message="已启动 XStreaming",
+                details={
+                    "path": xs,
+                    "exe_name": Path(xs).name,
+                    "client_name": Path(xs).stem or "XStreaming",
+                    "pid": getattr(proc, "pid", 0),
+                },
+            )
         except Exception as exc:
             return ActionResult(ok=False, code="LAUNCH_FAILED", message=f"启动 XStreaming 失败: {exc}", exit_code=1)
 
     if prefer in ("auto", "xbox") and xbox_installed:
         try:
             creationflags = CREATE_NO_WINDOW if os.name == "nt" else 0
-            subprocess.Popen(
+            proc = subprocess.Popen(
                 ["explorer.exe", r"shell:AppsFolder\Microsoft.GamingApp_8wekyb3d8bbwe!Microsoft.Xbox.App"],
                 creationflags=creationflags,
             )
-            return ActionResult(ok=True, code="LAUNCHED", message="已启动微软 Xbox 应用")
+            return ActionResult(
+                ok=True,
+                code="LAUNCHED",
+                message="已启动微软 Xbox 应用",
+                details={"client_name": "Xbox", "exe_name": "XboxPcApp.exe", "pid": getattr(proc, "pid", 0)},
+            )
         except Exception as exc:
             return ActionResult(ok=False, code="LAUNCH_FAILED", message=f"启动 Xbox 应用失败: {exc}", exit_code=1)
 
@@ -287,8 +368,17 @@ def _ps_quote(value: str) -> str:
     return "'" + value.replace("'", "''") + "'"
 
 
-def build_play_shortcut_name(cfg: AppConfig) -> str:
-    """Build a safe localized Windows .lnk filename for 1-click Quick Play."""
+def _sanitize_lnk_stem(raw: str) -> str:
+    cleaned = re.sub(r'[<>:"/\\|?*]+', " ", (raw or "").strip()).strip(". ")
+    return cleaned or "WireDeck"
+
+
+def build_play_shortcut_name(cfg: AppConfig, *, client_info: dict[str, Any] | None = None) -> str:
+    """Build target-app identical Windows .lnk filename (falls back to localized WireDeck name)."""
+    info = client_info if client_info is not None else resolve_stream_client_info(cfg.active_preset, cfg.custom_client_path)
+    if info.get("exe_path") and info.get("name"):
+        return f"{_sanitize_lnk_stem(str(info['name']))}.lnk"
+
     preset_labels = {
         "xbox": "Xbox",
         "playstation": "PlayStation",
@@ -342,6 +432,7 @@ def _write_desktop_shortcut(
     icon_loc: str,
     description: str,
     language: str,
+    window_style: int = 1,
     desktop_dir: Path | None = None,
     runner: Callable[[str, int], PsResult] = run_powershell,
 ) -> ActionResult:
@@ -357,6 +448,7 @@ $sc.TargetPath = {_ps_quote(target_exe)}
 $sc.Arguments = {_ps_quote(arg_str)}
 $sc.WorkingDirectory = {_ps_quote(work_dir)}
 $sc.IconLocation = {_ps_quote(icon_loc)}
+$sc.WindowStyle = {int(window_style)}
 $sc.Description = {_ps_quote(description)}
 $sc.Save()
 Write-Output $lnkPath
@@ -375,7 +467,7 @@ Write-Output $lnkPath
             code="SHORTCUT_CREATED",
             message=msg_map.get(language, msg_map["zh-CN"]),
             exit_code=0,
-            details={"path": out_path, "filename": filename},
+            details={"path": out_path, "filename": filename, "icon_location": icon_loc, "window_style": int(window_style)},
         )
     return ActionResult(
         ok=False,
@@ -391,23 +483,33 @@ def create_play_shortcut(
     *,
     desktop_dir: Path | None = None,
     runner: Callable[[str, int], PsResult] = run_powershell,
+    client_info: dict[str, Any] | None = None,
 ) -> ActionResult:
-    """Create a Desktop .lnk shortcut that enables this mode and launches the stream client."""
+    """Create a silent Desktop .lnk with the target app's name & icon that auto-enables WireDeck first."""
+    info = client_info if client_info is not None else resolve_stream_client_info(cfg.active_preset, cfg.custom_client_path)
     mode_sub = cfg.wireless_submode if cfg.wireless_submode in ("hotspot", "lan") else "hotspot"
     mode_tr = cfg.active_transport if cfg.active_transport in ("wired", "wireless") else "wired"
-    quick_args = f"--quick-play --preset {normalize_preset_id(cfg.active_preset)} --transport {mode_tr} --submode {mode_sub}"
-    target_exe, arg_str, work_dir, icon_loc = _resolve_shortcut_target(paths, quick_args)
-    return _write_desktop_shortcut(
-        filename=build_play_shortcut_name(cfg),
+    quick_args = f"--quick-play --silent --preset {normalize_preset_id(cfg.active_preset)} --transport {mode_tr} --submode {mode_sub}"
+    target_exe, arg_str, work_dir, default_icon = _resolve_shortcut_target(paths, quick_args)
+    icon_loc = str(info["icon_location"]) if info.get("icon_location") else default_icon
+    fname = build_play_shortcut_name(cfg, client_info=info)
+    desc = f"{info['name']} (via WireDeck)" if info.get("name") else "WireDeck Quick Play"
+    res = _write_desktop_shortcut(
+        filename=fname,
         target_exe=target_exe,
         arg_str=arg_str,
         work_dir=work_dir,
         icon_loc=icon_loc,
-        description="WireDeck Quick Play",
+        description=desc,
         language=cfg.language,
+        window_style=7,
         desktop_dir=desktop_dir,
         runner=runner,
     )
+    if res.ok:
+        res.details["client_name"] = str(info.get("name") or "")
+        res.details["silent"] = True
+    return res
 
 
 def build_restore_shortcut_name(cfg: AppConfig) -> str:
@@ -429,8 +531,8 @@ def create_restore_shortcut(
     desktop_dir: Path | None = None,
     runner: Callable[[str, int], PsResult] = run_powershell,
 ) -> ActionResult:
-    """Create a Desktop .lnk shortcut that restores normal Ethernet & Wi-Fi settings."""
-    target_exe, arg_str, work_dir, icon_loc = _resolve_shortcut_target(paths, "--quick-restore")
+    """Create a Desktop .lnk shortcut that restores normal Ethernet & Wi-Fi settings silently."""
+    target_exe, arg_str, work_dir, icon_loc = _resolve_shortcut_target(paths, "--quick-restore --silent")
     return _write_desktop_shortcut(
         filename=build_restore_shortcut_name(cfg),
         target_exe=target_exe,
@@ -439,6 +541,7 @@ def create_restore_shortcut(
         icon_loc=icon_loc,
         description="WireDeck Restore Normal Internet",
         language=cfg.language,
+        window_style=7,
         desktop_dir=desktop_dir,
         runner=runner,
     )

@@ -21,7 +21,7 @@ from wiredeck.version import APP_ID, APP_NAME, APP_VERSION, SCHEMA_VERSION
 
 def test_version_constants_are_single_source():
     assert APP_NAME == "WireDeck"
-    assert APP_VERSION == "0.1.0"
+    assert APP_VERSION == "0.2.0"
     assert APP_ID == "{8E4F7A21-6C3D-4B9E-9A12-5D8C1F4E2B70}"
     assert SCHEMA_VERSION == "1.0"
 
@@ -35,10 +35,14 @@ def test_portable_mode_uses_local_data_dir_with_non_ascii_and_spaces(tmp_path: P
     assert p.data_dir == (app_dir / "data").resolve()
     assert p.config_file == p.data_dir / "config.json"
     assert p.extensions_dir == p.data_dir / "extensions"
+    assert p.plugins_dir == p.data_dir / "plugins"
+    assert p.plugin_configs_dir == p.data_dir / "plugin_configs"
     assert p.logs_dir == p.data_dir / "logs"
     assert p.exports_dir == p.data_dir / "exports"
     assert p.runtime_dir == p.data_dir / "runtime"
     assert p.extensions_dir.is_dir()
+    assert p.plugins_dir.is_dir()
+    assert p.plugin_configs_dir.is_dir()
     assert p.logs_dir.is_dir()
     assert p.exports_dir.is_dir()
     assert p.runtime_dir.is_dir()

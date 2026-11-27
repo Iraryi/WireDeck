@@ -19,6 +19,124 @@ VALID_LANGUAGES = ("zh-CN", "zh-TW", "en", "ja")
 VALID_THEMES = ("light", "dark")
 VALID_TRANSPORTS = ("wired", "wireless")
 VALID_WIRELESS_SUBMODES = ("hotspot", "lan")
+VALID_RECORDER_BACKENDS = ("auto", "obs", "nvidia", "gamebar", "ffmpeg", "custom")
+VALID_RECORDER_MODES = ("manual", "replay", "auto_record")
+VALID_FFMPEG_FORMATS = ("mkv", "mp4", "mov", "ts", "flv")
+VALID_FFMPEG_ENCODERS = ("auto", "av1_nvenc", "hevc_nvenc", "h264_nvenc", "libx264")
+VALID_SPLIT_MODES = ("off", "time", "size", "both")
+DEFAULT_FILENAME_TEMPLATE = "{preset}_{date}_{time}"
+
+
+@dataclass
+class RecorderSettings:
+    backend: str = "auto"
+    mode: str = "replay"
+    auto_link_quick_play: bool = False
+    output_dir: str = ""
+    fallback_dir: str = ""
+    source_watch_dir: str = ""
+    auto_offload: bool = True
+    obs_exe_path: str = ""
+    ffmpeg_exe_path: str = ""
+    ffmpeg_format: str = "mkv"
+    ffmpeg_encoder: str = "auto"
+    ffmpeg_bitrate_mbps: int = 10
+    ffmpeg_fps: int = 60
+    custom_exe_path: str = ""
+    hotkey_record: str = ""
+    hotkey_replay: str = ""
+    max_storage_gb: float = 0.0
+    min_free_gb: float = 5.0
+    auto_prune: bool = False
+    split_mode: str = "off"
+    split_minutes: int = 30
+    split_size_mb: int = 2048
+    filename_template: str = DEFAULT_FILENAME_TEMPLATE
+    apply_naming_on_offload: bool = True
+    ffmpeg_audio_device: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+def normalize_recorder_settings(raw: Any) -> RecorderSettings:
+    if not isinstance(raw, dict):
+        return RecorderSettings()
+    backend = str(raw.get("backend", "auto")).strip().lower()
+    if backend not in VALID_RECORDER_BACKENDS:
+        backend = "auto"
+    mode = str(raw.get("mode", "replay")).strip().lower()
+    if mode not in VALID_RECORDER_MODES:
+        mode = "replay"
+    fmt = str(raw.get("ffmpeg_format", "mkv")).strip().lower()
+    if fmt not in VALID_FFMPEG_FORMATS:
+        fmt = "mkv"
+    enc = str(raw.get("ffmpeg_encoder", "auto")).strip().lower()
+    if enc not in VALID_FFMPEG_ENCODERS:
+        enc = "auto"
+    split_mode = str(raw.get("split_mode", "off")).strip().lower()
+    if split_mode not in VALID_SPLIT_MODES:
+        split_mode = "off"
+    try:
+        bitrate = max(2, min(60, int(raw.get("ffmpeg_bitrate_mbps", 10))))
+    except (TypeError, ValueError):
+        bitrate = 10
+    try:
+        fps = 30 if int(raw.get("ffmpeg_fps", 60)) <= 30 else 60
+    except (TypeError, ValueError):
+        fps = 60
+    try:
+        split_minutes = max(1, min(240, int(raw.get("split_minutes", 30))))
+    except (TypeError, ValueError):
+        split_minutes = 30
+    try:
+        split_size_mb = max(50, min(32768, int(raw.get("split_size_mb", 2048))))
+    except (TypeError, ValueError):
+        split_size_mb = 2048
+    try:
+        max_gb = max(0.0, float(raw.get("max_storage_gb", 0.0)))
+    except (TypeError, ValueError):
+        max_gb = 0.0
+    try:
+        min_gb = max(0.5, min(200.0, float(raw.get("min_free_gb", 5.0))))
+    except (TypeError, ValueError):
+        min_gb = 5.0
+
+    def _s(k: str) -> str:
+        v = raw.get(k, "")
+        return v.strip() if isinstance(v, str) else ""
+
+    raw_tpl = _s("filename_template")[:96]
+    if not raw_tpl:
+        raw_tpl = DEFAULT_FILENAME_TEMPLATE
+
+    return RecorderSettings(
+        backend=backend,
+        mode=mode,
+        auto_link_quick_play=bool(raw.get("auto_link_quick_play", False)),
+        output_dir=_s("output_dir"),
+        fallback_dir=_s("fallback_dir"),
+        source_watch_dir=_s("source_watch_dir"),
+        auto_offload=bool(raw.get("auto_offload", True)),
+        obs_exe_path=_s("obs_exe_path"),
+        ffmpeg_exe_path=_s("ffmpeg_exe_path"),
+        ffmpeg_format=fmt,
+        ffmpeg_encoder=enc,
+        ffmpeg_bitrate_mbps=bitrate,
+        ffmpeg_fps=fps,
+        custom_exe_path=_s("custom_exe_path"),
+        hotkey_record=_s("hotkey_record"),
+        hotkey_replay=_s("hotkey_replay"),
+        max_storage_gb=max_gb,
+        min_free_gb=min_gb,
+        auto_prune=bool(raw.get("auto_prune", False)),
+        split_mode=split_mode,
+        split_minutes=split_minutes,
+        split_size_mb=split_size_mb,
+        filename_template=raw_tpl,
+        apply_naming_on_offload=bool(raw.get("apply_naming_on_offload", True)),
+        ffmpeg_audio_device=_s("ffmpeg_audio_device")[:120],
+    )
 
 
 @dataclass
@@ -74,6 +192,10 @@ class AppConfig:
         hotspot_prefer_5ghz: bool = True,
         http_bridge_enabled: bool = False,
         onboarding_completed: bool = False,
+        plugin_registry_url: str = "",
+        keep_awake_during_stream: bool = True,
+        auto_restore_on_exit: bool = False,
+        recorder: RecorderSettings | None = None,
         presets: dict[str, PresetSettings] | None = None,
         # Optional direct overrides for the active preset (clean ergonomics & legacy compat)
         host_ip: str | None = None,
@@ -96,6 +218,10 @@ class AppConfig:
         self.hotspot_prefer_5ghz = bool(hotspot_prefer_5ghz)
         self.http_bridge_enabled = bool(http_bridge_enabled)
         self.onboarding_completed = bool(onboarding_completed)
+        self.plugin_registry_url = plugin_registry_url.strip() if isinstance(plugin_registry_url, str) else ""
+        self.keep_awake_during_stream = bool(keep_awake_during_stream)
+        self.auto_restore_on_exit = bool(auto_restore_on_exit)
+        self.recorder = recorder if isinstance(recorder, RecorderSettings) else RecorderSettings()
 
         self.presets: dict[str, PresetSettings] = _default_presets_map()
         if presets:
@@ -225,6 +351,10 @@ class AppConfig:
             "hotspot_prefer_5ghz": self.hotspot_prefer_5ghz,
             "http_bridge_enabled": self.http_bridge_enabled,
             "onboarding_completed": self.onboarding_completed,
+            "plugin_registry_url": self.plugin_registry_url,
+            "keep_awake_during_stream": self.keep_awake_during_stream,
+            "auto_restore_on_exit": self.auto_restore_on_exit,
+            "recorder": self.recorder.to_dict(),
             # Flattened active-preset convenience fields for GUI/CLI/exporter consumers
             "host_ip": self.host_ip,
             "prefix_length": self.prefix_length,
@@ -359,6 +489,10 @@ def _normalize_config(raw: dict[str, Any]) -> AppConfig:
         hotspot_prefer_5ghz=bool(raw.get("hotspot_prefer_5ghz", True)),
         http_bridge_enabled=bool(raw.get("http_bridge_enabled", False)),
         onboarding_completed=bool(raw.get("onboarding_completed", False)),
+        plugin_registry_url=str(raw.get("plugin_registry_url", "") or "").strip() if isinstance(raw.get("plugin_registry_url", ""), str) else "",
+        keep_awake_during_stream=bool(raw.get("keep_awake_during_stream", True)),
+        auto_restore_on_exit=bool(raw.get("auto_restore_on_exit", False)),
+        recorder=normalize_recorder_settings(raw.get("recorder")),
         presets=presets_map,
     )
 
@@ -400,6 +534,10 @@ def save_config(paths: AppPaths, cfg: AppConfig) -> None:
         "hotspot_prefer_5ghz": cfg.hotspot_prefer_5ghz,
         "http_bridge_enabled": cfg.http_bridge_enabled,
         "onboarding_completed": cfg.onboarding_completed,
+        "plugin_registry_url": cfg.plugin_registry_url,
+        "keep_awake_during_stream": cfg.keep_awake_during_stream,
+        "auto_restore_on_exit": cfg.auto_restore_on_exit,
+        "recorder": cfg.recorder.to_dict(),
         "presets": {pid: cfg.presets[pid].to_dict() for pid in ALL_PRESET_IDS},
     }
     content = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"

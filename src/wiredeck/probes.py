@@ -15,7 +15,7 @@ from typing import Any, Callable
 from wiredeck.config import AppConfig
 from wiredeck.presets import get_preset
 from wiredeck.ps_runner import CREATE_NO_WINDOW, PsResult, is_admin, run_powershell
-from wiredeck.version import FW_RULE_DIRECT, FW_RULE_NAT
+from wiredeck.version import APP_VERSION, FW_RULE_DIRECT, FW_RULE_NAT
 
 VIRTUAL_DESC_RE = re.compile(
     r"(vmware|hyper-v|vethernet|wsl|wintun|sing-tun|tailscale|wireguard|"
@@ -430,7 +430,7 @@ def _ping_peer(peer_ip: str, timeout_ms: int = 600) -> tuple[bool, float | None]
 def _http_probe(url: str, timeout: float = 2.0) -> tuple[bool, int]:
     req = urllib.request.Request(
         url,
-        headers={"User-Agent": "WireDeck/0.1.0"},
+        headers={"User-Agent": f"WireDeck/{APP_VERSION}"},
         method="GET",
     )
     try:

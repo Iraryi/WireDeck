@@ -1,0 +1,153 @@
+{
+  "schema": "wiredeck-plugin/v2",
+  "id": "framegen-sharpen",
+  "name": "高刷补帧与画质锐化（FrameGen & Sharpen）",
+  "version": "1.1.0",
+  "author": "WireDeck Official",
+  "category": "video-enhance",
+  "description": "实时读取 Lossless Scaling（小黄鸭）Settings.xml 配置与热键，支持选取指定 Profile 绑定串流端、智能防重触发（避免与 AutoScale 冲突）、也兼容开源免费 Magpie。",
+  "homepage": "https://github.com/Iraryi/WireDeck/tree/main/registry/plugins/framegen-sharpen",
+  "capabilities": ["video-enhance", "automation"],
+  "preset_scope": ["all"],
+  "enabled_by_default": true,
+  "requires_admin": false,
+  "timeout_sec": 12,
+  "hooks": {
+    "before_client_launch": "hooks/before_launch.ps1",
+    "after_client_launch": "hooks/after_launch.ps1",
+    "on_client_exit": "hooks/on_exit.ps1"
+  },
+  "actions": [
+    {
+      "id": "detect_engine",
+      "label": "自动扫描小黄鸭 / Magpie",
+      "script": "actions/detect_engine.ps1",
+      "description": "自动扫描 Steam 库与常见安装目录，定位 LosslessScaling.exe 或 Magpie.exe 并写入配置",
+      "style": "default"
+    },
+    {
+      "id": "create_streaming_profile",
+      "label": "生成推荐串流配置",
+      "script": "actions/create_streaming_profile.ps1",
+      "description": "自动备份 Settings.xml 并生成「WireDeck 串流高刷推荐」配置（WGC 捕获 + LSFG3 2x + LS1 锐化 + 适配屏幕刷新率）",
+      "style": "default"
+    },
+    {
+      "id": "open_engine",
+      "label": "打开补帧软件面板",
+      "script": "actions/open_engine.ps1",
+      "description": "打开增强工具以精细调节倍帧倍数、锐化强度与捕获参数",
+      "style": "default"
+    },
+    {
+      "id": "trigger_now",
+      "label": "测试触发补帧热键",
+      "script": "actions/trigger_now.ps1",
+      "description": "等待 1.5 秒后发送当前生效的热键组合",
+      "style": "primary"
+    }
+  ],
+  "settings_schema": [
+    {
+      "key": "engine",
+      "type": "select",
+      "label": "画质增强引擎",
+      "description": "Lossless Scaling（小黄鸭）支持 LSFG 补帧与 LS1/FSR；Magpie 为免费开源 FSR/Anime4K 方案",
+      "default": "lossless_scaling",
+      "options": [
+        { "value": "lossless_scaling", "label": "Lossless Scaling（小黄鸭 LSFG / LS1）" },
+        { "value": "magpie", "label": "Magpie（免费开源 FSR / Anime4K）" }
+      ]
+    },
+    {
+      "key": "ls_profile",
+      "type": "dynamic_select",
+      "label": "指定小黄鸭配置（Settings.xml）",
+      "description": "实时读取小黄鸭已有 Profile；选定后会在开玩前自动将其绑定到当前串流程序",
+      "default": "__auto__",
+      "options_script": "actions/list_profiles.ps1",
+      "options": [
+        { "value": "__auto__", "label": "自动匹配（使用小黄鸭自身规则）" }
+      ]
+    },
+    {
+      "key": "exe_path",
+      "type": "file_path",
+      "label": "增强程序路径（.exe）",
+      "description": "留空时会自动尝试探测本机 Steam 库与常见安装位置",
+      "default": "",
+      "file_filter": "Executable (*.exe)",
+      "placeholder": "例如 D:\\SteamLibrary\\steamapps\\common\\Lossless Scaling\\LosslessScaling.exe"
+    },
+    {
+      "key": "trigger_mode",
+      "type": "select",
+      "label": "自动触发策略",
+      "description": "若选定的小黄鸭配置已勾选 AutoScale，智能模式会跳过重复按热键防止意外开关抵消",
+      "default": "smart",
+      "options": [
+        { "value": "smart", "label": "智能防重（已开 AutoScale 则仅绑定并等待自动接管）" },
+        { "value": "always_hotkey", "label": "始终等待窗口并发送触发快捷键" },
+        { "value": "launch_only", "label": "仅后台拉起增强器，不自动发送热键" }
+      ]
+    },
+    {
+      "key": "auto_launch_engine",
+      "type": "bool",
+      "label": "开玩时自动后台启动增强器",
+      "description": "启动串流客户端前静默拉起小黄鸭/Magpie（若已在运行且未改配置则跳过）",
+      "default": true
+    },
+    {
+      "key": "auto_trigger_scale",
+      "type": "bool",
+      "label": "串流窗口就绪后自动触发补帧/锐化",
+      "description": "结合上方「自动触发策略」自动触发缩放补帧",
+      "default": true
+    },
+    {
+      "key": "scale_hotkey",
+      "type": "hotkey",
+      "label": "触发快捷键（留空自动读取小黄鸭 XML）",
+      "description": "留空时优先读取 Settings.xml 中的热键，读不到则使用 Ctrl+Alt+S / Win+Shift+A",
+      "default": "",
+      "placeholder": "留空自动同步 Settings.xml 热键"
+    },
+    {
+      "key": "delay_sec",
+      "type": "number",
+      "label": "窗口就绪后延迟（秒）",
+      "description": "串流画面渲染稳定前多等几秒再触发补帧（推荐 1.5 ~ 3.0 秒）",
+      "default": 2.0,
+      "min": 0.5,
+      "max": 15.0,
+      "step": 0.5
+    },
+    {
+      "key": "keep_awake",
+      "type": "bool",
+      "label": "串流期间防止电脑息屏/睡眠",
+      "description": "避免全屏挂机或手柄长玩期间屏幕变暗或休眠断流",
+      "default": true
+    },
+    {
+      "key": "enabled_presets",
+      "type": "multi_preset",
+      "label": "生效设备预设",
+      "description": "可按游戏机平台决定是否自动触发补帧",
+      "default": ["xbox", "playstation", "handheld"]
+    },
+    {
+      "key": "auto_close_on_exit",
+      "type": "bool",
+      "label": "退出串流后自动关闭增强器",
+      "description": "从桌面快捷方式关闭串流应用后，自动回收增强器进程",
+      "default": false
+    }
+  ],
+  "diagnostic_check": "check.ps1",
+  "requirements": {
+    "summary": "需搭配 Steam 版 Lossless Scaling（小黄鸭）或免费开源 Magpie 使用",
+    "install_hint": "请先在 Steam 安装 Lossless Scaling 或从 GitHub 下载 Magpie，然后在插件设置点击「自动扫描」"
+  }
+}

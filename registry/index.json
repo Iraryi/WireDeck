@@ -1,0 +1,166 @@
+{
+  "schema": "wiredeck-registry/v1",
+  "generated_at": "2026-11-27T15:43:59.016170+00:00",
+  "plugins": [
+    {
+      "id": "framegen-sharpen",
+      "name": "高刷补帧与画质锐化（FrameGen & Sharpen）",
+      "version": "1.1.0",
+      "author": "WireDeck Official",
+      "category": "video-enhance",
+      "capabilities": [
+        "video-enhance",
+        "automation"
+      ],
+      "preset_scope": [
+        "all"
+      ],
+      "description": "实时读取 Lossless Scaling（小黄鸭）Settings.xml 配置与热键，支持选取指定 Profile 绑定串流端、智能防重触发（避免与 AutoScale 冲突）、也兼容开源免费 Magpie。",
+      "homepage": "https://github.com/Iraryi/WireDeck/tree/main/registry/plugins/framegen-sharpen",
+      "requirements": {
+        "summary": "需搭配 Steam 版 Lossless Scaling（小黄鸭）或免费开源 Magpie 使用",
+        "install_hint": "请先在 Steam 安装 Lossless Scaling 或从 GitHub 下载 Magpie，然后在插件设置点击「自动扫描」"
+      },
+      "hooks": [
+        "before_client_launch",
+        "after_client_launch",
+        "on_client_exit"
+      ],
+      "files": [
+        {
+          "path": "actions/create_streaming_profile.ps1",
+          "url": "https://raw.githubusercontent.com/Iraryi/WireDeck/main/registry/plugins/framegen-sharpen/actions/create_streaming_profile.ps1",
+          "sha256": "81b2fcb9c85b7562c1b08be958749d778dde322e582509e9722055e62038879d",
+          "size_bytes": 4449
+        },
+        {
+          "path": "actions/detect_engine.ps1",
+          "url": "https://raw.githubusercontent.com/Iraryi/WireDeck/main/registry/plugins/framegen-sharpen/actions/detect_engine.ps1",
+          "sha256": "67a025d1cf3383c0590aaa32f0bb9eb3cce1ccd12a25106f48df5a0d0beddcaf",
+          "size_bytes": 1890
+        },
+        {
+          "path": "actions/list_profiles.ps1",
+          "url": "https://raw.githubusercontent.com/Iraryi/WireDeck/main/registry/plugins/framegen-sharpen/actions/list_profiles.ps1",
+          "sha256": "de94b5412cd04ba70883e35e5c2e1b736a6806152df759ef36aa10bbde354690",
+          "size_bytes": 2524
+        },
+        {
+          "path": "actions/open_engine.ps1",
+          "url": "https://raw.githubusercontent.com/Iraryi/WireDeck/main/registry/plugins/framegen-sharpen/actions/open_engine.ps1",
+          "sha256": "2337b6d7b8a36e985cb37d775b9d6760c1657365313cfb2ee2b7974f9b791b18",
+          "size_bytes": 996
+        },
+        {
+          "path": "actions/trigger_now.ps1",
+          "url": "https://raw.githubusercontent.com/Iraryi/WireDeck/main/registry/plugins/framegen-sharpen/actions/trigger_now.ps1",
+          "sha256": "62fc9514d35be42ca5c42c4b8892043b5249bd5019bc32b65573d2c1caab3dc5",
+          "size_bytes": 935
+        },
+        {
+          "path": "check.ps1",
+          "url": "https://raw.githubusercontent.com/Iraryi/WireDeck/main/registry/plugins/framegen-sharpen/check.ps1",
+          "sha256": "a5957ef69aca3bedf2bd45c74b1f6c3c71f5cacc5d669786dc2d53b5c861b44c",
+          "size_bytes": 3620
+        },
+        {
+          "path": "hooks/after_launch.ps1",
+          "url": "https://raw.githubusercontent.com/Iraryi/WireDeck/main/registry/plugins/framegen-sharpen/hooks/after_launch.ps1",
+          "sha256": "95bf2aab8d562763ea724e2ff8193f5e9feb98a878ab5d5b7cf1a4314e19ac64",
+          "size_bytes": 5619
+        },
+        {
+          "path": "hooks/before_launch.ps1",
+          "url": "https://raw.githubusercontent.com/Iraryi/WireDeck/main/registry/plugins/framegen-sharpen/hooks/before_launch.ps1",
+          "sha256": "f035739b3b8f262a61da579b993e2371aa4d8c463b898aeafc54a941a395d899",
+          "size_bytes": 6970
+        },
+        {
+          "path": "hooks/on_exit.ps1",
+          "url": "https://raw.githubusercontent.com/Iraryi/WireDeck/main/registry/plugins/framegen-sharpen/hooks/on_exit.ps1",
+          "sha256": "3c956316d034797411b61f5b850729835dd57520f7c43f5b2c7945c4fb2ed668",
+          "size_bytes": 1295
+        },
+        {
+          "path": "plugin.json",
+          "url": "https://raw.githubusercontent.com/Iraryi/WireDeck/main/registry/plugins/framegen-sharpen/plugin.json",
+          "sha256": "6902e6efd289624f41f3b0e1c3cac6e008c4df023e504502d173e19b56ebafca",
+          "size_bytes": 6055
+        }
+      ]
+    },
+    {
+      "id": "nvidia-driver-toolkit",
+      "name": "NVIDIA 驱动更新与双显卡调度工具包",
+      "version": "1.0.0",
+      "author": "WireDeck Official",
+      "category": "video-enhance",
+      "capabilities": [
+        "video-enhance",
+        "automation"
+      ],
+      "preset_scope": [
+        "all"
+      ],
+      "description": "自动识别笔记本 NVIDIA 显卡型号、在线检索并拉取官方最新 Game Ready / Studio 驱动安装包，一键将串流客户端与小黄鸭锁定到高性能 NVIDIA 独显（免去核显抢帧/黑屏），并提供 RTX 40/50 系 Smooth Motion 引导。",
+      "homepage": "https://github.com/Iraryi/WireDeck/tree/main/registry/plugins/nvidia-driver-toolkit",
+      "requirements": {
+        "summary": "适用于配备 NVIDIA GeForce RTX / GTX 显卡的笔记本与台式机",
+        "install_hint": "点击「配置」即可查看当前驱动状态、在线检测最新版或锁定双显卡独显调度"
+      },
+      "hooks": [
+        "before_client_launch"
+      ],
+      "files": [
+        {
+          "path": "actions/bind_dgpu.ps1",
+          "url": "https://raw.githubusercontent.com/Iraryi/WireDeck/main/registry/plugins/nvidia-driver-toolkit/actions/bind_dgpu.ps1",
+          "sha256": "6cb2a8c0e034b5bdae00119c4ff8cb2961cebeb07bf9647582a73d04b14aab90",
+          "size_bytes": 2131
+        },
+        {
+          "path": "actions/check_driver.ps1",
+          "url": "https://raw.githubusercontent.com/Iraryi/WireDeck/main/registry/plugins/nvidia-driver-toolkit/actions/check_driver.ps1",
+          "sha256": "a21ee30132ddb6f1c2190675216a17ed0fe7fd341eb4e734acaee5fb95c1ad4f",
+          "size_bytes": 4447
+        },
+        {
+          "path": "actions/download_driver.ps1",
+          "url": "https://raw.githubusercontent.com/Iraryi/WireDeck/main/registry/plugins/nvidia-driver-toolkit/actions/download_driver.ps1",
+          "sha256": "e312a9e6adcd61522799b11c6471b4e7cf2c3268e7ca0e2f31dc4bd24b968e83",
+          "size_bytes": 1345
+        },
+        {
+          "path": "actions/open_nvidia_app.ps1",
+          "url": "https://raw.githubusercontent.com/Iraryi/WireDeck/main/registry/plugins/nvidia-driver-toolkit/actions/open_nvidia_app.ps1",
+          "sha256": "0e4955f2afbaab01bf134b3d822247df540d22b3c66d7d7872f76987b0cd3e47",
+          "size_bytes": 1089
+        },
+        {
+          "path": "actions/reset_dgpu.ps1",
+          "url": "https://raw.githubusercontent.com/Iraryi/WireDeck/main/registry/plugins/nvidia-driver-toolkit/actions/reset_dgpu.ps1",
+          "sha256": "2bc38acc388410d9c648066f1052ff8afeac34410adb1b34de69798a98279413",
+          "size_bytes": 1852
+        },
+        {
+          "path": "check.ps1",
+          "url": "https://raw.githubusercontent.com/Iraryi/WireDeck/main/registry/plugins/nvidia-driver-toolkit/check.ps1",
+          "sha256": "a3520c6d92f89b88117c926e949309aacbe77efadef9080cfeacfb6aa9c91880",
+          "size_bytes": 1320
+        },
+        {
+          "path": "hooks/before_client_launch.ps1",
+          "url": "https://raw.githubusercontent.com/Iraryi/WireDeck/main/registry/plugins/nvidia-driver-toolkit/hooks/before_client_launch.ps1",
+          "sha256": "c493748c46ecb9e0b2c0d4ab599c6a64a0f5d8f157ef442366d5207d3d8d9162",
+          "size_bytes": 2301
+        },
+        {
+          "path": "plugin.json",
+          "url": "https://raw.githubusercontent.com/Iraryi/WireDeck/main/registry/plugins/nvidia-driver-toolkit/plugin.json",
+          "sha256": "eb840ecec6b462c6e3c45a0274cb457f87fb3e9a1c1cec475c3c5250b85b52b7",
+          "size_bytes": 4739
+        }
+      ]
+    }
+  ]
+}

@@ -28,9 +28,27 @@ from wiredeck.paths import (
     resolve_app_paths,
     resolve_app_paths_from_data_dir,
 )
+from wiredeck.plugins import (
+    fetch_plugin_catalog,
+    install_plugin_from_github,
+    list_installed_plugins,
+    set_plugin_enabled,
+    uninstall_plugin,
+)
+from wiredeck.recorder import (
+    detect_recorders,
+    inspect_target_path,
+    list_recorded_clips,
+    list_storage_drives,
+    offload_clips_to_target,
+    preview_clip_filenames,
+    prune_clips_by_quota,
+    resolve_effective_split_policy,
+)
 from wiredeck.presets import ALL_PRESET_IDS, PRESET_ALIASES, normalize_preset_id
 from wiredeck.probes import collect_system_snapshot
 from wiredeck.ps_runner import is_admin, run_elevated_worker, run_powershell
+from wiredeck.system_env import collect_system_env, evaluate_system_health
 from wiredeck.toolkits import discover_all_toolkits, discover_toolkits, run_toolkit
 from wiredeck.version import APP_NAME, APP_VERSION, NAT_NAME, SCHEMA_VERSION
 
@@ -216,6 +234,50 @@ def _build_parser() -> argparse.ArgumentParser:
     p_tk_run = tk_sub.add_parser("run", help="Run a bundled read-only toolkit script")
     p_tk_run.add_argument("tool_id")
     p_tk_run.add_argument("--json", action="store_true", dest="as_json")
+
+    p_plg = sub.add_parser("plugin", help="Manage GitHub patches and plugins")
+    plg_sub = p_plg.add_subparsers(dest="plugin_cmd")
+
+    p_plg_list = plg_sub.add_parser("list", help="List installed plugins")
+    p_plg_list.add_argument("--json", action="store_true", dest="as_json")
+
+    p_plg_cat = plg_sub.add_parser("catalog", help="Fetch available patches from GitHub registry")
+    p_plg_cat.add_argument("--url", default="")
+    p_plg_cat.add_argument("--json", action="store_true", dest="as_json")
+
+    p_plg_inst = plg_sub.add_parser("install", help="Install a plugin from GitHub catalog or URL")
+    p_plg_inst.add_argument("target", help="Catalog plugin ID, owner/repo, or plugin-package.json URL")
+    p_plg_inst.add_argument("--json", action="store_true", dest="as_json")
+
+    p_plg_en = plg_sub.add_parser("enable", help="Enable an installed plugin")
+    p_plg_en.add_argument("plugin_id")
+    p_plg_en.add_argument("--json", action="store_true", dest="as_json")
+
+    p_plg_dis = plg_sub.add_parser("disable", help="Disable an installed plugin")
+    p_plg_dis.add_argument("plugin_id")
+    p_plg_dis.add_argument("--json", action="store_true", dest="as_json")
+
+    p_plg_rm = plg_sub.add_parser("remove", help="Uninstall a plugin")
+    p_plg_rm.add_argument("plugin_id")
+    p_plg_rm.add_argument("--purge", action="store_true")
+    p_plg_rm.add_argument("--json", action="store_true", dest="as_json")
+
+    p_rec = sub.add_parser("recorder", help="Inspect external drives, video clips, and recorders")
+    rec_sub = p_rec.add_subparsers(dest="rec_cmd")
+
+    for cmd_name, help_txt in (
+        ("status", "Show recorder backends and target storage status"),
+        ("drives", "List mounted USB/local drives with filesystem and estimated recording hours"),
+        ("clips", "List recorded video clips in target output directory"),
+        ("offload", "Offload local captures to target output directory with SHA-256 verification"),
+        ("prune", "Prune oldest clips in target directory according to storage quota"),
+    ):
+        sub_p = rec_sub.add_parser(cmd_name, help=help_txt)
+        sub_p.add_argument("--dir", dest="rec_dir", default="", help="Optional target output folder override")
+        sub_p.add_argument("--json", action="store_true", dest="as_json")
+
+    p_doc = sub.add_parser("doctor", help="Run whole-system readiness & health check across power, GPU, storage, and plugins")
+    p_doc.add_argument("--json", action="store_true", dest="as_json")
 
     return parser
 
@@ -413,6 +475,158 @@ def main(argv: list[str] | None = None) -> int:
             return 0 if res.ok else 1
 
         parser.parse_args(["toolkit", "--help"])
+        return 0
+
+    if args.command == "plugin":
+        if args.plugin_cmd == "list":
+            entries = list_installed_plugins(paths)
+            payload = {"plugins_dir": str(paths.plugins_dir), "plugins": entries}
+            lines = [f"Plugins ({len(entries)}) in {paths.plugins_dir}:"]
+            for e in entries:
+                m = e.get("manifest") or {}
+                lines.append(f"  - {m.get('id')} v{m.get('version', '?')} | valid={e['valid']} | enabled={e['enabled']}")
+            _emit(payload, args.as_json, "\n".join(lines))
+            return 0
+
+        if args.plugin_cmd == "catalog":
+            cat = fetch_plugin_catalog(args.url or cfg.plugin_registry_url)
+            lines = [f"Catalog ok={cat['ok']} ({len(cat['plugins'])} entries):"]
+            for p in cat["plugins"]:
+                lines.append(f"  - {p.get('id')} v{p.get('version')} [{p.get('category', '')}] {p.get('name', '')}")
+            _emit(cat, args.as_json, "\n".join(lines))
+            return 0 if cat["ok"] else 1
+
+        if args.plugin_cmd == "install":
+            t = str(args.target or "").strip()
+            is_url = t.startswith(("https://", "http://")) or ("/" in t)
+            res = install_plugin_from_github(
+                paths,
+                plugin_id="" if is_url else t,
+                registry_url=cfg.plugin_registry_url,
+                direct_url=t if is_url else "",
+            )
+            _emit(res.to_dict(), args.as_json, f"[{res.code}] {res.message}")
+            return res.exit_code
+
+        if args.plugin_cmd in ("enable", "disable"):
+            res = set_plugin_enabled(paths, args.plugin_id, args.plugin_cmd == "enable")
+            _emit(res.to_dict(), args.as_json, f"[{res.code}] {res.message}")
+            return res.exit_code
+
+        if args.plugin_cmd == "remove":
+            res = uninstall_plugin(paths, args.plugin_id, remove_config=bool(args.purge))
+            _emit(res.to_dict(), args.as_json, f"[{res.code}] {res.message}")
+            return res.exit_code
+
+        parser.parse_args(["plugin", "--help"])
+        return 0
+
+    if args.command == "recorder":
+        target_dir = (getattr(args, "rec_dir", "") or cfg.recorder.output_dir or "").strip()
+        if args.rec_cmd == "status":
+            drives = list_storage_drives(bitrate_mbps=cfg.recorder.ffmpeg_bitrate_mbps)
+            det = detect_recorders(cfg)
+            tgt = inspect_target_path(target_dir, bitrate_mbps=cfg.recorder.ffmpeg_bitrate_mbps, min_free_gb=cfg.recorder.min_free_gb, drives=drives)
+            payload = {
+                "recorder": cfg.recorder.to_dict(),
+                "detected": det,
+                "target": tgt,
+                "effective_split": resolve_effective_split_policy(
+                    cfg.recorder.split_mode,
+                    cfg.recorder.split_minutes,
+                    cfg.recorder.split_size_mb,
+                    filesystem=str(tgt.get("filesystem") or ""),
+                ),
+                "filename_preview": preview_clip_filenames(
+                    cfg.recorder.filename_template,
+                    target_dir=target_dir,
+                    ext=cfg.recorder.ffmpeg_format,
+                    preset=cfg.active_preset,
+                    backend=str(det.get("effective_backend") or "obs"),
+                    mode=cfg.recorder.mode,
+                ),
+                "drives": drives,
+            }
+            _emit(payload, args.as_json, f"backend={payload['detected']['effective_backend']} | target={target_dir or '<unset>'}")
+            return 0
+        if args.rec_cmd == "drives":
+            drives = list_storage_drives(bitrate_mbps=cfg.recorder.ffmpeg_bitrate_mbps)
+            payload = {"drives": drives}
+            lines = [f"Drives ({len(drives)}):"]
+            for d in drives:
+                lines.append(f"  - {d['device_id']} ({d['filesystem']}, {d['free_gb']} GB free, ~{d['est_hours']}h)")
+            _emit(payload, args.as_json, "\n".join(lines))
+            return 0
+        if args.rec_cmd == "clips":
+            res_clips = list_recorded_clips(target_dir)
+            _emit(res_clips, args.as_json, f"Clips: {res_clips['total_count']} files ({res_clips['total_gb']} GB) in {target_dir}")
+            return 0
+        if args.rec_cmd == "offload":
+            if not target_dir:
+                out = ActionResult(ok=False, code="NO_OUTPUT_DIR", message="未设置目标录像目录", exit_code=1)
+                _emit(out.to_dict(), args.as_json, out.message)
+                return 1
+            watch = [Path(cfg.recorder.source_watch_dir)] if cfg.recorder.source_watch_dir.strip() else [Path.home() / "Videos" / "Captures", Path.home() / "Videos" / "NVIDIA"]
+            det = detect_recorders(cfg)
+            out = offload_clips_to_target(
+                watch,
+                Path(target_dir),
+                apply_naming=cfg.recorder.apply_naming_on_offload,
+                filename_template=cfg.recorder.filename_template,
+                preset=cfg.active_preset,
+                backend=str(det.get("effective_backend") or "obs"),
+                mode=cfg.recorder.mode,
+            )
+            _emit(out.to_dict(), args.as_json, f"[{out.code}] {out.message}")
+            return out.exit_code
+        if args.rec_cmd == "prune":
+            if not target_dir:
+                out = ActionResult(ok=False, code="NO_OUTPUT_DIR", message="未设置目标录像目录", exit_code=1)
+                _emit(out.to_dict(), args.as_json, out.message)
+                return 1
+            out = prune_clips_by_quota(Path(target_dir), max_storage_gb=cfg.recorder.max_storage_gb, min_free_gb=cfg.recorder.min_free_gb)
+            _emit(out.to_dict(), args.as_json, f"[{out.code}] {out.message}")
+            return out.exit_code
+        parser.parse_args(["recorder", "--help"])
+        return 0
+
+    if args.command == "doctor":
+        sys_env = collect_system_env()
+        drives = list_storage_drives(bitrate_mbps=cfg.recorder.ffmpeg_bitrate_mbps)
+        det = detect_recorders(cfg, system_env=sys_env)
+        t_dir = cfg.recorder.output_dir.strip()
+        tgt = inspect_target_path(
+            t_dir,
+            bitrate_mbps=cfg.recorder.ffmpeg_bitrate_mbps,
+            min_free_gb=cfg.recorder.min_free_gb,
+            drives=drives,
+        )
+        eff = resolve_effective_split_policy(
+            cfg.recorder.split_mode,
+            cfg.recorder.split_minutes,
+            cfg.recorder.split_size_mb,
+            filesystem=str(tgt.get("filesystem") or ""),
+        )
+        fb_dir = cfg.recorder.fallback_dir.strip()
+        fb_pending = 0
+        if fb_dir and fb_dir != t_dir and Path(fb_dir).is_dir():
+            fb_pending = int(list_recorded_clips(fb_dir).get("total_count") or 0)
+        health = evaluate_system_health(
+            system_env=sys_env,
+            cfg_dict=cfg.to_dict(),
+            recorder_detected=det,
+            target_status=tgt,
+            effective_split=eff,
+            fallback_pending_count=fb_pending,
+            installed_plugins=list_installed_plugins(paths),
+        )
+        lines = [f"{APP_NAME} v{APP_VERSION} Doctor | overall={health['overall']} | warnings={health['warning_count']}"]
+        for it in health.get("items") or []:
+            mark = "OK" if it.get("ok") else "WARN"
+            lines.append(f"  [{mark}] {it.get('label')}: {it.get('value')}")
+        for w in health.get("warnings") or []:
+            lines.append(f"  ! [{w.get('code')}] {w.get('title')}: {w.get('detail')}")
+        _emit(health, args.as_json, "\n".join(lines))
         return 0
 
     return 1

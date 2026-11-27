@@ -7,6 +7,7 @@ import ctypes
 import ipaddress
 import json
 import os
+import signal
 import subprocess
 import sys
 import threading
@@ -18,7 +19,7 @@ from typing import Any, Callable
 
 from wiredeck.actions import execute_action
 from wiredeck.bridge import LocalBridgeServer
-from wiredeck.config import AppConfig, load_config, save_config
+from wiredeck.config import AppConfig, load_config, normalize_recorder_settings, save_config
 from wiredeck.diagnostics import classify_snapshot, run_diagnosis
 from wiredeck.exporter import export_diagnostic_bundle
 from wiredeck.extensions import discover_extensions, inspect_extensions, run_extension
@@ -30,18 +31,54 @@ from wiredeck.paths import (
     get_web_dir,
     resolve_app_paths,
 )
+from wiredeck.plugins import (
+    DEFAULT_PLUGIN_REGISTRY_URL,
+    SUPPORTED_CAPABILITIES,
+    SUPPORTED_HOOK_EVENTS,
+    SUPPORTED_HOST_COMMANDS,
+    emit_plugin_hook,
+    fetch_plugin_catalog,
+    get_active_plugin_badges,
+    has_enabled_hook,
+    install_plugin_from_github,
+    list_installed_plugins,
+    resolve_plugin_dynamic_options,
+    run_plugin_action,
+    run_plugin_check,
+    save_plugin_config,
+    set_plugin_enabled,
+    uninstall_plugin,
+)
 from wiredeck.presets import get_preset, list_presets, normalize_preset_id
 from wiredeck.probes import _ping_peer, collect_system_snapshot
 from wiredeck.ps_runner import is_admin, run_elevated_worker, run_powershell
+from wiredeck.recorder import (
+    RecorderController,
+    delete_clip_file,
+    detect_recorders,
+    inspect_target_path,
+    list_recorded_clips,
+    list_storage_drives,
+    offload_clips_to_target,
+    preview_clip_filenames,
+    prune_clips_by_quota,
+    rename_clip_with_forced_seq,
+    resolve_effective_split_policy,
+    sync_obs_output_dir,
+)
 from wiredeck.stream_client import (
+    build_play_shortcut_name,
     create_play_shortcut,
     create_restore_shortcut,
     download_and_verify_asset,
     fetch_latest_xstreaming_release,
     launch_stream_client,
+    resolve_stream_client_info,
 )
+from wiredeck.system_env import collect_system_env, collect_system_env_cached, evaluate_system_health
 from wiredeck.toolkits import discover_toolkits, run_toolkit
 from wiredeck.version import APP_NAME, APP_VERSION, NAT_NAME
+from wiredeck.win32_helpers import Win32Ops, default_win32_ops
 from wiredeck.wireless_diagnostics import classify_wireless_snapshot, run_wireless_diagnosis
 from wiredeck.wireless_probes import collect_wireless_snapshot, get_hotspot_credentials, measure_wifi_jitter
 
@@ -278,6 +315,7 @@ class WireDeckApi:
         paths: AppPaths | None = None,
         snapshot_fn: Callable[..., dict[str, Any]] = collect_system_snapshot,
         wireless_snapshot_fn: Callable[..., dict[str, Any]] = collect_wireless_snapshot,
+        win32_ops: Win32Ops | None = None,
         preview_state: str | None = None,
         preview_wizard_step: int | None = None,
     ) -> None:
@@ -285,12 +323,14 @@ class WireDeckApi:
         self.cfg = load_config(self.paths)
         self._snapshot_fn = snapshot_fn
         self._wireless_snapshot_fn = wireless_snapshot_fn
+        self._win32_ops = win32_ops or default_win32_ops()
         self._preview_state = preview_state
         self._preview_wizard_step = preview_wizard_step
         self._last_report: DiagnosticReport | None = None
         self._last_wireless_report: DiagnosticReport | None = None
         self._bridge: LocalBridgeServer | None = None
         self._window: Any = None
+        self._recorder = RecorderController()
         if preview_state in ("wireless", "wireless_wizard"):
             self.cfg.active_transport = "wireless"
             self.cfg.wireless_submode = "hotspot"
@@ -301,7 +341,7 @@ class WireDeckApi:
             self.cfg.active_transport = "wired"
 
     def _preview_view_name(self) -> str | None:
-        if self._preview_state in ("wizard", "ai", "settings"):
+        if self._preview_state in ("wizard", "ai", "settings", "plugins", "recorder"):
             return self._preview_state
         if self._preview_state in ("wireless", "wireless_lan"):
             return "wireless"
@@ -446,7 +486,20 @@ class WireDeckApi:
     def run_action(self, action: str, opts: dict[str, Any] | None = None) -> dict[str, Any]:
         if self._preview_state:
             return ActionResult(ok=True, code="PREVIEW_ONLY", message="预览模式下不修改本机网络").to_dict()
-        return self._execute_or_elevate(action, opts or {}).to_dict()
+        ctx = _build_hook_context(self.cfg)
+        ctx["action"] = action
+        if action in ("enable-direct", "enable-hotspot", "optimize-wifi"):
+            emit_plugin_hook(self.paths, "before_transport_enable", ctx, win32_ops=self._win32_ops)
+        elif action in ("disable-direct", "disable-hotspot", "restore-wifi"):
+            emit_plugin_hook(self.paths, "before_transport_disable", ctx, win32_ops=self._win32_ops)
+
+        res = self._execute_or_elevate(action, opts or {})
+
+        if res.ok and action in ("enable-direct", "enable-hotspot", "optimize-wifi"):
+            emit_plugin_hook(self.paths, "after_transport_enable", ctx, win32_ops=self._win32_ops)
+        elif res.ok and action in ("disable-direct", "disable-hotspot", "restore-wifi"):
+            emit_plugin_hook(self.paths, "after_transport_disable", ctx, win32_ops=self._win32_ops)
+        return res.to_dict()
 
     def complete_onboarding(self, language: str, preset_id: str, transport: str = "wired") -> dict[str, Any]:
         """Save initial startup language, chosen transport & preset, and mark onboarding complete."""
@@ -555,6 +608,10 @@ class WireDeckApi:
             self.cfg.hotspot_prefer_5ghz = bool(patch["hotspot_prefer_5ghz"])
         if "onboarding_completed" in patch:
             self.cfg.onboarding_completed = bool(patch["onboarding_completed"])
+        if "keep_awake_during_stream" in patch:
+            self.cfg.keep_awake_during_stream = bool(patch["keep_awake_during_stream"])
+        if "auto_restore_on_exit" in patch:
+            self.cfg.auto_restore_on_exit = bool(patch["auto_restore_on_exit"])
         if "custom_client_path" in patch:
             self.cfg.custom_client_path = str(patch["custom_client_path"] or "").strip()
 
@@ -608,7 +665,12 @@ class WireDeckApi:
                 if self._preview_state
                 else run_diagnosis(self.paths, self.cfg, include_extensions=True, probe_network=True, snapshot_fn=self._snapshot_fn)
             )
-        bundle_path, prompt = export_diagnostic_bundle(self.paths, report, self.cfg)
+        bundle_path, prompt = export_diagnostic_bundle(
+            self.paths,
+            report,
+            self.cfg,
+            system_health=self.get_system_health(),
+        )
         return {"ok": True, "bundle_path": str(bundle_path), "prompt": prompt}
 
     def list_extensions(self) -> list[dict[str, Any]]:
@@ -782,30 +844,119 @@ class WireDeckApi:
         """Activate configured connection mode if idle & launch streaming client cleanly."""
         if self._preview_state:
             return ActionResult(ok=True, code="PREVIEW_ONLY", message="预览模式下模拟已开网并启动客户端").to_dict()
-        done, fallback_view = _run_quick_play(
+        done, fallback_view, err_msg, launch_details = _run_quick_play_detailed(
             self,
             preset_id=self.cfg.active_preset,
             transport=self.cfg.active_transport,
             submode=self.cfg.wireless_submode,
+            silent=False,
+            win32_ops=self._win32_ops,
         )
+        if done:
+            client_pid = int((launch_details or {}).get("pid") or 0)
+            self._start_session_supervisor(client_pid, launch_details or {}, blocking=False)
         return {
             "ok": done,
             "code": "QUICK_PLAY_OK" if done else "QUICK_PLAY_BLOCKED",
             "fallback_view": fallback_view,
-            "message": "" if done else "存在前置阻断或未找到客户端，已定位到需要处理的步骤",
+            "message": "" if done else (err_msg or "存在前置阻断或未找到客户端，已定位到需要处理的步骤"),
         }
 
-    def create_play_shortcut(self) -> dict[str, Any]:
-        """Create a Desktop .lnk Quick-Play shortcut for the current preset and transport."""
-        if self._preview_state:
-            from wiredeck.stream_client import build_play_shortcut_name
+    def _make_recorder_callback(self) -> Callable[[str], dict[str, Any]]:
+        def _cb(action_name: str) -> dict[str, Any]:
+            act = str(action_name or "").strip().lower()
+            if act == "start":
+                return self.recorder_start()
+            if act == "stop":
+                return self.recorder_stop()
+            if act == "save_replay":
+                return self.recorder_save_replay()
+            if act == "offload":
+                return self.recorder_offload_now()
+            if act == "split_now":
+                return self.recorder_split_now()
+            return {"ok": False, "code": "UNKNOWN_RECORDER_ACTION", "message": f"不支持的录屏动作: {act}"}
 
-            fname = build_play_shortcut_name(self.cfg)
+        return _cb
+
+    def _start_session_supervisor(
+        self,
+        client_pid: int,
+        launch_details: dict[str, Any],
+        *,
+        skip_plugins: bool = False,
+        plugin_overrides: dict[str, dict[str, Any]] | None = None,
+        blocking: bool = False,
+    ) -> None:
+        need_exit_hook = (not skip_plugins) and has_enabled_hook(self.paths, "on_client_exit")
+        need_awake = bool(self.cfg.keep_awake_during_stream)
+        need_rec = bool(self.cfg.recorder.auto_link_quick_play)
+        need_restore = bool(self.cfg.auto_restore_on_exit)
+        if not blocking and (client_pid <= 0 or not (need_exit_hook or need_awake or need_rec or need_restore)):
+            return
+
+        if need_rec:
+            self._recorder.on_session_start(
+                self.cfg,
+                self.paths,
+                system_env=collect_system_env_cached(),
+                win32_ops=self._win32_ops,
+            )
+
+        if client_pid <= 0 or not (need_exit_hook or need_awake or need_rec or need_restore):
+            return
+
+        def _watch() -> None:
+            if need_awake:
+                self._win32_ops.set_keep_awake(True)
+            try:
+                self._win32_ops.wait_for_pid_exit(client_pid, poll_interval=1.0)
+            finally:
+                if need_awake:
+                    self._win32_ops.set_keep_awake(False)
+                if need_rec:
+                    self._recorder.on_session_end(self.cfg, self.paths, win32_ops=self._win32_ops)
+                if need_exit_hook:
+                    exit_ctx = _build_hook_context(
+                        self.cfg,
+                        silent=blocking,
+                        paths=self.paths,
+                        plugin_overrides=plugin_overrides,
+                        extra={
+                            "client_pid": client_pid,
+                            "client_exe": str(launch_details.get("exe_name") or ""),
+                            "client_exe_path": str(launch_details.get("path") or ""),
+                            "client_name": str(launch_details.get("client_name") or ""),
+                            "_recorder_callback": self._make_recorder_callback(),
+                        },
+                    )
+                    emit_plugin_hook(self.paths, "on_client_exit", exit_ctx, win32_ops=self._win32_ops)
+                if need_restore:
+                    try:
+                        _run_quick_restore(self, silent=True)
+                    except Exception:
+                        pass
+
+        if blocking:
+            _watch()
+        else:
+            threading.Thread(target=_watch, name="WireDeck-SessionSupervisor", daemon=True).start()
+
+    def create_play_shortcut(self) -> dict[str, Any]:
+        """Create a silent Desktop .lnk with the target app's name & icon."""
+        if self._preview_state:
+            client_info = {
+                "name": "XStreaming",
+                "exe_path": "C:\\Program Files\\XStreaming\\XStreaming.exe",
+                "icon_location": "C:\\Program Files\\XStreaming\\XStreaming.exe,0",
+                "is_custom": False,
+            }
+            fname = build_play_shortcut_name(self.cfg, client_info=client_info)
             return ActionResult(
                 ok=True,
                 code="PREVIEW_ONLY",
                 message=f"预览模式下模拟已创建：{fname}",
-                details={"filename": fname},
+                details={"filename": fname, "client_name": "XStreaming", "silent": True},
             ).to_dict()
         return create_play_shortcut(self.paths, self.cfg).to_dict()
 
@@ -823,14 +974,682 @@ class WireDeckApi:
             ).to_dict()
         return create_restore_shortcut(self.paths, self.cfg).to_dict()
 
+    def _preview_plugins_data(self) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        preview_manifest = {
+            "schema": "wiredeck-plugin/v2",
+            "id": "framegen-sharpen",
+            "name": "高刷补帧与画质锐化（FrameGen & Sharpen）",
+            "version": "1.1.0",
+            "author": "WireDeck Official",
+            "category": "video-enhance",
+            "description": "实时读取小黄鸭 Settings.xml 配置与热键，支持选定串流专属配置、智能防重触发、自动拉起 LSFG 补帧与 LS1 / FSR 画质锐化。",
+            "homepage": "https://github.com/Iraryi/WireDeck/tree/main/registry/plugins/framegen-sharpen",
+            "capabilities": ["video-enhance", "automation"],
+            "preset_scope": ["all"],
+            "enabled_by_default": True,
+            "requires_admin": False,
+            "timeout_sec": 12,
+            "hooks": {
+                "before_client_launch": "hooks/before_launch.ps1",
+                "after_client_launch": "hooks/after_launch.ps1",
+                "on_client_exit": "hooks/on_exit.ps1",
+            },
+            "actions": [
+                {"id": "detect_engine", "label": "自动扫描小黄鸭 / Magpie", "script": "actions/detect_engine.ps1", "description": "从 Steam 库或本地目录自动查找安装路径", "style": "default"},
+                {"id": "create_streaming_profile", "label": "生成推荐串流配置", "script": "actions/create_streaming_profile.ps1", "description": "备份并写入 WGC + LSFG3 2x + LS1 配置到小黄鸭 Settings.xml", "style": "default"},
+                {"id": "open_engine", "label": "打开参数面板", "script": "actions/open_engine.ps1", "description": "打开 Lossless Scaling 或 Magpie 设置界面", "style": "default"},
+                {"id": "trigger_now", "label": "测试补帧热键", "script": "actions/trigger_now.ps1", "description": "1.5 秒后发送配置好的快捷键", "style": "primary"},
+            ],
+            "settings_schema": [
+                {
+                    "key": "engine",
+                    "type": "select",
+                    "label": "增强引擎",
+                    "default": "lossless_scaling",
+                    "options": [
+                        {"value": "lossless_scaling", "label": "Lossless Scaling（小黄鸭 LSFG / LS1）"},
+                        {"value": "magpie", "label": "Magpie（开源 FSR / Anime4K 免费方案）"},
+                    ],
+                },
+                {
+                    "key": "ls_profile",
+                    "type": "dynamic_select",
+                    "label": "小黄鸭配置（Settings.xml）",
+                    "default": "__auto__",
+                    "options_script": "actions/list_profiles.ps1",
+                },
+                {"key": "exe_path", "type": "file_path", "label": "程序路径（.exe）", "default": "D:\\SteamLibrary\\steamapps\\common\\Lossless Scaling\\LosslessScaling.exe", "placeholder": "点击自动扫描或手动指定 .exe"},
+                {
+                    "key": "trigger_mode",
+                    "type": "select",
+                    "label": "自动触发策略",
+                    "default": "smart",
+                    "options": [
+                        {"value": "smart", "label": "智能防重（若小黄鸭已开 AutoScale 则跳过热键）"},
+                        {"value": "always_hotkey", "label": "始终发送热键触发"},
+                        {"value": "launch_only", "label": "仅后台拉起增强器"},
+                    ],
+                },
+                {"key": "auto_launch_engine", "type": "bool", "label": "开玩时自动后台启动", "default": True},
+                {"key": "auto_trigger_scale", "type": "bool", "label": "窗口就绪后自动触发补帧/锐化", "default": True},
+                {"key": "scale_hotkey", "type": "hotkey", "label": "触发快捷键（留空自动读取 XML）", "default": "Ctrl+Alt+S"},
+                {"key": "delay_sec", "type": "number", "label": "窗口就绪后等待（秒）", "default": 2.0, "min": 0.5, "max": 15.0, "step": 0.5},
+                {"key": "keep_awake", "type": "bool", "label": "串流期间防止息屏休眠", "default": True},
+                {"key": "auto_close_on_exit", "type": "bool", "label": "退出串流时关闭增强器", "default": False},
+            ],
+            "requirements": {
+                "summary": "搭配 Steam 版 Lossless Scaling（小黄鸭）或开源免费 Magpie 使用",
+                "install_hint": "Steam 搜索 Lossless Scaling 或前往 GitHub 获取 Magpie",
+            },
+        }
+        installed = [
+            {
+                "valid": True,
+                "errors": [],
+                "enabled": True,
+                "settings": {
+                    "engine": "lossless_scaling",
+                    "ls_profile": "WireDeck 串流高刷推荐",
+                    "exe_path": "D:\\SteamLibrary\\steamapps\\common\\Lossless Scaling\\LosslessScaling.exe",
+                    "trigger_mode": "smart",
+                    "auto_launch_engine": True,
+                    "auto_trigger_scale": True,
+                    "scale_hotkey": "",
+                    "delay_sec": 2.0,
+                    "keep_awake": True,
+                    "auto_close_on_exit": False,
+                },
+                "install_meta": {"version": "1.1.0", "verified_sha256": True},
+                "manifest": preview_manifest,
+            }
+        ]
+        catalog = {
+            "ok": True,
+            "registry_url": self.cfg.plugin_registry_url or DEFAULT_PLUGIN_REGISTRY_URL,
+            "plugins": [
+                {
+                    "id": "framegen-sharpen",
+                    "name": preview_manifest["name"],
+                    "version": "1.1.0",
+                    "author": "WireDeck Official",
+                    "category": "video-enhance",
+                    "capabilities": ["video-enhance", "automation"],
+                    "description": preview_manifest["description"],
+                    "homepage": preview_manifest["homepage"],
+                    "requirements": preview_manifest["requirements"],
+                },
+                {
+                    "id": "nvidia-driver-toolkit",
+                    "name": "NVIDIA 驱动更新与双显卡调度工具包",
+                    "version": "1.0.0",
+                    "author": "WireDeck Official",
+                    "category": "video-enhance",
+                    "capabilities": ["video-enhance", "automation"],
+                    "description": "自动识别笔记本 NVIDIA 显卡型号、在线检索并拉取官方最新 Game Ready / Studio 驱动安装包，支持串流端与小黄鸭独显性能绑定及 Smooth Motion 引导。",
+                    "homepage": "https://github.com/Iraryi/WireDeck/tree/main/registry/plugins/nvidia-driver-toolkit",
+                    "requirements": {"summary": "适用于 NVIDIA GeForce RTX / GTX 显卡（RTX 40/50 系支持驱动级 Smooth Motion）"},
+                },
+            ],
+            "error": "",
+        }
+        return installed, catalog
+
+    def list_plugins(self) -> list[dict[str, Any]]:
+        if self._preview_state == "plugins":
+            installed, _ = self._preview_plugins_data()
+            return installed
+        return list_installed_plugins(self.paths)
+
+    def fetch_plugin_catalog(self, custom_url: str = "") -> dict[str, Any]:
+        if self._preview_state == "plugins":
+            _, catalog = self._preview_plugins_data()
+            return catalog
+        reg = (custom_url or "").strip() or self.cfg.plugin_registry_url
+        return fetch_plugin_catalog(reg)
+
+    def install_plugin(self, plugin_id: str = "", direct_url: str = "") -> dict[str, Any]:
+        if self._preview_state:
+            return ActionResult(ok=True, code="PREVIEW_ONLY", message="预览模式下模拟已从 GitHub 校验安装").to_dict()
+        return install_plugin_from_github(
+            self.paths,
+            plugin_id=plugin_id,
+            registry_url=self.cfg.plugin_registry_url,
+            direct_url=direct_url,
+        ).to_dict()
+
+    def uninstall_plugin(self, plugin_id: str, remove_config: bool = False) -> dict[str, Any]:
+        if self._preview_state:
+            return ActionResult(ok=True, code="PREVIEW_ONLY", message="预览模式下模拟已卸载插件").to_dict()
+        return uninstall_plugin(self.paths, plugin_id, remove_config=bool(remove_config)).to_dict()
+
+    def set_plugin_enabled(self, plugin_id: str, enabled: bool) -> dict[str, Any]:
+        if self._preview_state:
+            return ActionResult(ok=True, code="PREVIEW_ONLY", message="预览模式切换插件状态").to_dict()
+        return set_plugin_enabled(self.paths, plugin_id, bool(enabled)).to_dict()
+
+    def save_plugin_settings(self, plugin_id: str, settings: dict[str, Any]) -> dict[str, Any]:
+        if self._preview_state:
+            return {"ok": True, "code": "PREVIEW_ONLY", "message": "预览模式已应用设置"}
+        saved = save_plugin_config(self.paths, plugin_id, settings=settings)
+        return {"ok": True, "code": "PLUGIN_SETTINGS_SAVED", "message": "插件设置已保存", **saved}
+
+    def run_plugin_action(self, plugin_id: str, action_id: str) -> dict[str, Any]:
+        if self._preview_state:
+            return {"ok": True, "code": "PREVIEW_ONLY", "message": f"预览模式已触发 {action_id}"}
+        return run_plugin_action(
+            self.paths,
+            plugin_id,
+            action_id,
+            context=_build_hook_context(
+                self.cfg,
+                paths=self.paths,
+                extra={"_recorder_callback": self._make_recorder_callback()},
+            ),
+            win32_ops=self._win32_ops,
+        )
+
+    def run_plugin_check(self, plugin_id: str) -> dict[str, Any]:
+        if self._preview_state:
+            return {"ok": True, "status": "ok", "code": "PREVIEW_OK", "message": "预览模式：RTX 5070 Ti (240 Hz) · 已读取小黄鸭配置「WireDeck 串流高刷推荐」与热键 Ctrl+Alt+S"}
+        return run_plugin_check(self.paths, plugin_id, context=_build_hook_context(self.cfg, paths=self.paths))
+
+    def get_plugin_dynamic_options(self, plugin_id: str) -> dict[str, Any]:
+        if self._preview_state:
+            return {
+                "ok": True,
+                "options_by_key": {
+                    "ls_profile": [
+                        {"value": "__auto__", "label": "自动匹配（使用小黄鸭自身规则）"},
+                        {"value": "WireDeck 串流高刷推荐", "label": "WireDeck 串流高刷推荐 [LSFG3 240Hz · LS1 · WGC]"},
+                        {"value": "Fullscreen", "label": "Fullscreen [Off · Integer · DXGI]"},
+                    ]
+                },
+                "meta_by_key": {"ls_profile": {"detected_hotkey": "Ctrl+Alt+S"}},
+            }
+        return resolve_plugin_dynamic_options(self.paths, plugin_id, context=_build_hook_context(self.cfg, paths=self.paths))
+
+    def get_system_env(self) -> dict[str, Any]:
+        if self._preview_state:
+            return {
+                "gpus": [
+                    {"name": "Intel(R) UHD Graphics", "vendor": "Intel", "driver_version": "32.0.101.6733", "is_nvidia": False, "is_discrete": False, "is_laptop": True, "supports_smooth_motion": False, "refresh_hz": 240, "resolution": "2560x1600"},
+                    {"name": "NVIDIA GeForce RTX 5070 Ti Laptop GPU", "vendor": "NVIDIA", "driver_version": "572.84", "is_nvidia": True, "is_discrete": True, "is_laptop": True, "supports_smooth_motion": True, "refresh_hz": 0, "resolution": ""},
+                ],
+                "primary_nvidia_gpu": {"name": "NVIDIA GeForce RTX 5070 Ti Laptop GPU", "driver_version": "572.84", "supports_smooth_motion": True},
+                "is_dual_gpu": True,
+                "max_refresh_hz": 240,
+                "primary_resolution": "2560x1600",
+                "virtual_displays": [],
+                "on_battery": False,
+                "nvidia_app_installed": True,
+            }
+        return collect_system_env_cached()
+
+    def get_system_health(self) -> dict[str, Any]:
+        if self._preview_state:
+            rec_st = self._preview_recorder_state()
+            return evaluate_system_health(
+                system_env=self.get_system_env(),
+                cfg_dict=self.cfg.to_dict(),
+                recorder_detected=rec_st["detected"],
+                target_status=rec_st["target_status"],
+                effective_split=rec_st["effective_split"],
+                fallback_pending_count=0,
+                installed_plugins=self.list_plugins(),
+            )
+        rec = self.cfg.recorder
+        sys_env = collect_system_env_cached()
+        drives = list_storage_drives(bitrate_mbps=rec.ffmpeg_bitrate_mbps)
+        t_dir = rec.output_dir.strip()
+        det = detect_recorders(self.cfg, system_env=sys_env)
+        tgt = inspect_target_path(t_dir, bitrate_mbps=rec.ffmpeg_bitrate_mbps, min_free_gb=rec.min_free_gb, drives=drives)
+        eff = resolve_effective_split_policy(
+            rec.split_mode,
+            rec.split_minutes,
+            rec.split_size_mb,
+            filesystem=str(tgt.get("filesystem") or ""),
+        )
+        fb_dir = rec.fallback_dir.strip()
+        fb_pending = 0
+        if fb_dir and fb_dir != t_dir and Path(fb_dir).is_dir():
+            fb_pending = int(list_recorded_clips(fb_dir).get("total_count") or 0)
+        return evaluate_system_health(
+            system_env=sys_env,
+            cfg_dict=self.cfg.to_dict(),
+            recorder_detected=det,
+            target_status=tgt,
+            effective_split=eff,
+            fallback_pending_count=fb_pending,
+            installed_plugins=list_installed_plugins(self.paths),
+        )
+
+    def pick_plugin_file(self, file_filter: str = "") -> dict[str, Any]:
+        if self._preview_state:
+            return {"ok": True, "path": "D:\\SteamLibrary\\steamapps\\common\\Lossless Scaling\\LosslessScaling.exe"}
+        if self._window is None:
+            return {"ok": False, "code": "NO_WINDOW"}
+        try:
+            import webview
+
+            ft = (file_filter.strip(), "All files (*.*)") if file_filter.strip() else ("Executable (*.exe)", "All files (*.*)")
+            picked = self._window.create_file_dialog(webview.OPEN_DIALOG, allow_multiple=False, file_types=ft)
+            if not picked:
+                return {"ok": False, "code": "CANCELLED"}
+            chosen = str(picked[0] if isinstance(picked, (list, tuple)) else picked).strip()
+            return {"ok": True, "path": chosen} if chosen else {"ok": False, "code": "CANCELLED"}
+        except Exception as exc:
+            return {"ok": False, "code": "PICK_FAILED", "message": str(exc)}
+
+    def set_plugin_registry_url(self, url: str = "") -> dict[str, Any]:
+        if self._preview_state:
+            return {"ok": True, "registry_url": url.strip() or DEFAULT_PLUGIN_REGISTRY_URL}
+        self.cfg.plugin_registry_url = (url or "").strip()
+        save_config(self.paths, self.cfg)
+        return {"ok": True, "registry_url": self.cfg.plugin_registry_url or DEFAULT_PLUGIN_REGISTRY_URL}
+
+    def get_plugin_badges(self) -> list[dict[str, Any]]:
+        if self._preview_state == "plugins":
+            installed, _ = self._preview_plugins_data()
+            return [
+                {
+                    "id": p["manifest"]["id"],
+                    "name": p["manifest"]["name"],
+                    "version": p["manifest"]["version"],
+                    "category": p["manifest"]["category"],
+                }
+                for p in installed
+            ]
+        if self._preview_state:
+            return []
+        return get_active_plugin_badges(self.paths, self.cfg.active_preset)
+
+    def get_plugin_sdk_info(self) -> dict[str, Any]:
+        return {
+            "schema": "wiredeck-plugin/v2",
+            "default_registry_url": DEFAULT_PLUGIN_REGISTRY_URL,
+            "active_registry_url": self.cfg.plugin_registry_url or DEFAULT_PLUGIN_REGISTRY_URL,
+            "hooks": list(SUPPORTED_HOOK_EVENTS),
+            "capabilities": list(SUPPORTED_CAPABILITIES),
+            "host_commands": list(SUPPORTED_HOST_COMMANDS),
+        }
+
+    def _preview_recorder_state(self) -> dict[str, Any]:
+        sample_rec = normalize_recorder_settings(
+            {
+                "backend": "obs",
+                "mode": "replay",
+                "auto_link_quick_play": True,
+                "output_dir": "E:\\XboxClips",
+                "auto_offload": True,
+                "ffmpeg_format": "mkv",
+                "ffmpeg_encoder": "auto",
+                "ffmpeg_bitrate_mbps": 10,
+                "ffmpeg_fps": 60,
+                "max_storage_gb": 80,
+                "min_free_gb": 5,
+                "auto_prune": False,
+                "split_mode": "both",
+                "split_minutes": 30,
+                "split_size_mb": 2048,
+                "filename_template": "{preset}_{date}_{time}",
+                "apply_naming_on_offload": True,
+            }
+        ).to_dict()
+        drives = [
+            {
+                "device_id": "E:",
+                "volume_name": "USB_1TB",
+                "drive_type": 2,
+                "drive_type_label": "USB 可移动盘",
+                "filesystem": "exFAT",
+                "free_bytes": 116_400_000_000,
+                "total_bytes": 1_000_000_000_000,
+                "free_gb": 108.4,
+                "total_gb": 931.5,
+                "supports_large_files": True,
+                "est_hours": 24.1,
+                "is_removable": True,
+                "recommended": True,
+            },
+            {
+                "device_id": "D:",
+                "volume_name": "Data",
+                "drive_type": 3,
+                "drive_type_label": "本机固定盘",
+                "filesystem": "NTFS",
+                "free_bytes": 134_000_000_000,
+                "total_bytes": 671_000_000_000,
+                "free_gb": 124.8,
+                "total_gb": 625.0,
+                "supports_large_files": True,
+                "est_hours": 27.7,
+                "is_removable": False,
+                "recommended": False,
+            },
+        ]
+        return {
+            "ok": True,
+            "recorder": sample_rec,
+            "detected": {
+                "effective_backend": "obs",
+                "obs": {
+                    "installed": True,
+                    "exe_path": "C:\\Program Files\\obs-studio\\bin\\64bit\\obs64.exe",
+                    "profile_name": "WireDeck",
+                    "record_format": "mkv",
+                    "record_path": "E:\\XboxClips",
+                    "split_enabled": True,
+                    "split_type": "Time",
+                    "split_time": 30,
+                    "split_size": 2048,
+                },
+                "nvidia": {"available": True, "supports_av1": True, "gpu_name": "NVIDIA GeForce RTX 5070 Ti Laptop GPU"},
+                "gamebar": {"available": True},
+                "ffmpeg": {"available": True, "exe_path": "C:\\ffmpeg\\bin\\ffmpeg.exe"},
+                "custom": {"available": False, "exe_path": ""},
+                "watch_dirs": ["C:\\Users\\Demo\\Videos\\Captures", "C:\\Users\\Demo\\Videos\\NVIDIA"],
+            },
+            "drives": drives,
+            "target_status": {
+                "configured": True,
+                "online": True,
+                "path": "E:\\XboxClips",
+                "device_id": "E:",
+                "volume_name": "USB_1TB",
+                "filesystem": "exFAT",
+                "supports_large_files": True,
+                "is_removable": True,
+                "free_gb": 108.4,
+                "est_hours": 24.1,
+                "warnings": [],
+            },
+            "fallback_status": {"configured": False, "online": False},
+            "fallback_pending_count": 0,
+            "effective_split": resolve_effective_split_policy("both", 30, 2048, filesystem="exFAT"),
+            "filename_preview": preview_clip_filenames(
+                "{preset}_{date}_{time}",
+                ext="mkv",
+                preset="xbox",
+                backend="obs",
+                mode="replay",
+            ),
+            "runtime_status": {
+                "is_recording": False,
+                "active_backend": "",
+                "active_file": "",
+                "current_segment": 0,
+                "segments_completed": 0,
+                "elapsed_sec": 0.0,
+                "segment_elapsed_sec": 0.0,
+                "current_size_mb": 0.0,
+                "used_fallback": False,
+            },
+            "is_recording": False,
+            "active_file": "",
+            "clips_summary": {
+                "ok": True,
+                "total_count": 2,
+                "total_gb": 1.84,
+                "clips": [
+                    {"name": "1_xbox_20261127_221000.mkv", "path": "E:\\XboxClips\\1_xbox_20261127_221000.mkv", "ext": "mkv", "seq": 1, "size_mb": 1280.4, "mtime_iso": "2026-11-27 22:10"},
+                    {"name": "2_xbox_20261127_224000.mp4", "path": "E:\\XboxClips\\2_xbox_20261127_224000.mp4", "ext": "mp4", "seq": 2, "size_mb": 604.2, "mtime_iso": "2026-11-27 22:40"},
+                ],
+            },
+        }
+
+    def get_recorder_state(self) -> dict[str, Any]:
+        if self._preview_state == "recorder":
+            return self._preview_recorder_state()
+        sys_env = collect_system_env_cached() if not self._preview_state else {}
+        rec = self.cfg.recorder
+        drives = list_storage_drives(bitrate_mbps=rec.ffmpeg_bitrate_mbps)
+        t_dir = rec.output_dir.strip()
+        fb_dir = rec.fallback_dir.strip()
+        detected = detect_recorders(self.cfg, system_env=sys_env)
+        target_status = inspect_target_path(
+            t_dir,
+            bitrate_mbps=rec.ffmpeg_bitrate_mbps,
+            min_free_gb=rec.min_free_gb,
+            drives=drives,
+        )
+        fb_status = (
+            inspect_target_path(fb_dir, bitrate_mbps=rec.ffmpeg_bitrate_mbps, min_free_gb=rec.min_free_gb, drives=drives)
+            if fb_dir
+            else {"configured": False, "online": False}
+        )
+        fb_pending = 0
+        if fb_dir and fb_dir != t_dir and fb_status.get("online"):
+            fb_pending = int(list_recorded_clips(fb_dir).get("total_count") or 0)
+
+        preview_ext = rec.ffmpeg_format if detected["effective_backend"] == "ffmpeg" else (
+            (detected.get("obs") or {}).get("record_format") or rec.ffmpeg_format or "mkv"
+        )
+        return {
+            "ok": True,
+            "recorder": rec.to_dict(),
+            "detected": detected,
+            "drives": drives,
+            "target_status": target_status,
+            "fallback_status": fb_status,
+            "fallback_pending_count": fb_pending,
+            "effective_split": resolve_effective_split_policy(
+                rec.split_mode,
+                rec.split_minutes,
+                rec.split_size_mb,
+                filesystem=str(target_status.get("filesystem") or ""),
+            ),
+            "filename_preview": preview_clip_filenames(
+                rec.filename_template,
+                target_dir=t_dir,
+                ext=preview_ext,
+                preset=self.cfg.active_preset,
+                backend=detected["effective_backend"],
+                mode=rec.mode,
+            ),
+            "runtime_status": self._recorder.get_runtime_status(),
+            "is_recording": self._recorder.is_recording,
+            "active_file": self._recorder.active_file,
+            "clips_summary": list_recorded_clips(t_dir),
+        }
+
+    def save_recorder_settings(self, patch: dict[str, Any]) -> dict[str, Any]:
+        if self._preview_state:
+            return {"ok": True, "code": "PREVIEW_ONLY", "message": "预览模式下已模拟保存录制配置"}
+        merged = {**self.cfg.recorder.to_dict(), **(patch if isinstance(patch, dict) else {})}
+        self.cfg.recorder = normalize_recorder_settings(merged)
+        save_config(self.paths, self.cfg)
+        return {"ok": True, "code": "RECORDER_SAVED", "message": "录屏与存储设置已保存", "recorder": self.cfg.recorder.to_dict()}
+
+    def preview_recorder_filename(self, template: str = "", ext: str = "") -> dict[str, Any]:
+        rec = self.cfg.recorder
+        return {
+            "ok": True,
+            "examples": preview_clip_filenames(
+                template or rec.filename_template,
+                target_dir=rec.output_dir.strip(),
+                ext=ext or rec.ffmpeg_format or "mkv",
+                preset=self.cfg.active_preset,
+                backend=rec.backend,
+                mode=rec.mode,
+            ),
+        }
+
+    def list_recorder_clips(self) -> dict[str, Any]:
+        if self._preview_state == "recorder":
+            return self._preview_recorder_state()["clips_summary"]
+        return list_recorded_clips(self.cfg.recorder.output_dir.strip())
+
+    def recorder_start(self) -> dict[str, Any]:
+        if self._preview_state:
+            return ActionResult(ok=True, code="PREVIEW_ONLY", message="预览模式下已模拟开启录屏 / 回放缓存").to_dict()
+        return self._recorder.start_recording(
+            self.cfg,
+            self.paths,
+            system_env=collect_system_env_cached(),
+            win32_ops=self._win32_ops,
+        ).to_dict()
+
+    def recorder_stop(self) -> dict[str, Any]:
+        if self._preview_state:
+            return ActionResult(ok=True, code="PREVIEW_ONLY", message="预览模式下已模拟停止录屏").to_dict()
+        return self._recorder.stop_recording(self.cfg, self.paths, win32_ops=self._win32_ops).to_dict()
+
+    def recorder_save_replay(self) -> dict[str, Any]:
+        if self._preview_state:
+            return ActionResult(ok=True, code="PREVIEW_ONLY", message="预览模式下已模拟触发保存高光回放").to_dict()
+        return self._recorder.save_replay(
+            self.cfg,
+            system_env=collect_system_env_cached(),
+            win32_ops=self._win32_ops,
+        ).to_dict()
+
+    def recorder_split_now(self) -> dict[str, Any]:
+        if self._preview_state:
+            return ActionResult(ok=True, code="PREVIEW_ONLY", message="预览模式下已模拟切入下一录像段").to_dict()
+        return self._recorder.split_now(self.cfg, self.paths, win32_ops=self._win32_ops).to_dict()
+
+    def recorder_sync_obs_path(self) -> dict[str, Any]:
+        if self._preview_state:
+            return ActionResult(ok=True, code="PREVIEW_ONLY", message="预览模式下已模拟同步 OBS 输出目录与分段").to_dict()
+        rec = self.cfg.recorder
+        return sync_obs_output_dir(
+            rec.output_dir.strip(),
+            paths=self.paths,
+            split_mode=rec.split_mode,
+            split_minutes=rec.split_minutes,
+            split_size_mb=rec.split_size_mb,
+        ).to_dict()
+
+    def recorder_offload_now(self) -> dict[str, Any]:
+        if self._preview_state:
+            return ActionResult(ok=True, code="PREVIEW_ONLY", message="预览模式下已模拟校验归档片段").to_dict()
+        rec = self.cfg.recorder
+        target = rec.output_dir.strip()
+        if not target:
+            return ActionResult(ok=False, code="NO_OUTPUT_DIR", message="请先在「存储与归档」中设置目标录像文件夹", exit_code=1).to_dict()
+        src_dirs = (
+            [Path(rec.source_watch_dir.strip())]
+            if rec.source_watch_dir.strip()
+            else [Path.home() / "Videos" / "Captures", Path.home() / "Videos" / "NVIDIA"]
+        )
+        det = detect_recorders(self.cfg)
+        return offload_clips_to_target(
+            src_dirs,
+            Path(target),
+            delete_source=True,
+            apply_naming=rec.apply_naming_on_offload,
+            filename_template=rec.filename_template,
+            preset=self.cfg.active_preset,
+            backend=str(det.get("effective_backend") or "obs"),
+            mode=rec.mode,
+        ).to_dict()
+
+    def recorder_migrate_fallback(self) -> dict[str, Any]:
+        if self._preview_state:
+            return ActionResult(ok=True, code="PREVIEW_ONLY", message="预览模式下已模拟迁回备用盘暂存片段").to_dict()
+        rec = self.cfg.recorder
+        target = rec.output_dir.strip()
+        fb = rec.fallback_dir.strip()
+        if not target or not fb:
+            return ActionResult(ok=False, code="NO_FALLBACK_DIR", message="请先同时设置主目标目录与本地备用目录", exit_code=1).to_dict()
+        t_st = inspect_target_path(target, bitrate_mbps=rec.ffmpeg_bitrate_mbps, min_free_gb=rec.min_free_gb)
+        if not t_st.get("online"):
+            return ActionResult(ok=False, code="TARGET_OFFLINE", message="目标外接盘当前未在线，请先插好 U盘/移动硬盘", exit_code=1).to_dict()
+        det = detect_recorders(self.cfg)
+        return offload_clips_to_target(
+            [Path(fb)],
+            Path(target),
+            delete_source=True,
+            apply_naming=rec.apply_naming_on_offload,
+            filename_template=rec.filename_template,
+            preset=self.cfg.active_preset,
+            backend=str(det.get("effective_backend") or "obs"),
+            mode=rec.mode,
+        ).to_dict()
+
+    def recorder_rename_clip(self, clip_path: str, new_body: str) -> dict[str, Any]:
+        if self._preview_state:
+            return ActionResult(ok=True, code="PREVIEW_ONLY", message=f"预览模式下模拟已重命名为 1_{new_body}").to_dict()
+        target = self.cfg.recorder.output_dir.strip()
+        if not target:
+            return ActionResult(ok=False, code="NO_OUTPUT_DIR", message="未设置目标目录", exit_code=1).to_dict()
+        return rename_clip_with_forced_seq(Path(target), Path(clip_path), new_body).to_dict()
+
+    def recorder_prune_now(self) -> dict[str, Any]:
+        if self._preview_state:
+            return ActionResult(ok=True, code="PREVIEW_ONLY", message="预览模式下已模拟按配额清理").to_dict()
+        target = self.cfg.recorder.output_dir.strip()
+        if not target:
+            return ActionResult(ok=False, code="NO_OUTPUT_DIR", message="请先设置目标录像文件夹", exit_code=1).to_dict()
+        return prune_clips_by_quota(
+            Path(target),
+            max_storage_gb=self.cfg.recorder.max_storage_gb,
+            min_free_gb=self.cfg.recorder.min_free_gb,
+        ).to_dict()
+
+    def recorder_open_clip(self, clip_path: str) -> dict[str, Any]:
+        if self._preview_state:
+            return {"ok": True}
+        try:
+            p = Path(clip_path)
+            if p.is_file():
+                os.startfile(str(p))  # type: ignore[attr-defined]
+                return {"ok": True}
+        except Exception as exc:
+            return {"ok": False, "message": str(exc)}
+        return {"ok": False, "message": "文件不存在"}
+
+    def recorder_reveal_clip(self, clip_path: str) -> dict[str, Any]:
+        if self._preview_state:
+            return {"ok": True}
+        try:
+            p = Path(clip_path)
+            if p.exists():
+                subprocess.Popen(["explorer.exe", "/select,", str(p)])
+                return {"ok": True}
+        except Exception as exc:
+            return {"ok": False, "message": str(exc)}
+        return {"ok": False, "message": "文件不存在"}
+
+    def recorder_delete_clip(self, clip_path: str) -> dict[str, Any]:
+        if self._preview_state:
+            return ActionResult(ok=True, code="PREVIEW_ONLY", message="预览模式下已模拟删除片段").to_dict()
+        target = self.cfg.recorder.output_dir.strip()
+        if not target:
+            return ActionResult(ok=False, code="NO_OUTPUT_DIR", message="未设置目标目录", exit_code=1).to_dict()
+        return delete_clip_file(Path(target), Path(clip_path)).to_dict()
+
+    def pick_recorder_folder(self) -> dict[str, Any]:
+        if self._preview_state:
+            return {"ok": True, "path": "E:\\XboxClips"}
+        if self._window is None:
+            return {"ok": False, "code": "NO_WINDOW"}
+        try:
+            import webview
+
+            picked = self._window.create_file_dialog(webview.FOLDER_DIALOG, allow_multiple=False)
+            if not picked:
+                return {"ok": False, "code": "CANCELLED"}
+            chosen = str(picked[0] if isinstance(picked, (list, tuple)) else picked).strip()
+            return {"ok": True, "path": chosen} if chosen else {"ok": False, "code": "CANCELLED"}
+        except Exception as exc:
+            return {"ok": False, "code": "PICK_FAILED", "message": str(exc)}
+
+    def pick_recorder_exe(self, kind: str = "custom") -> dict[str, Any]:
+        return self.pick_plugin_file("Executable (*.exe)")
+
     def open_folder(self, kind: str) -> dict[str, Any]:
         mapping = {
             "extensions": self.paths.extensions_dir,
+            "plugins": self.paths.plugins_dir,
             "logs": self.paths.logs_dir,
             "exports": self.paths.exports_dir,
             "data": self.paths.data_dir,
         }
-        target = mapping.get(kind, self.paths.data_dir)
+        if kind == "recorder" and self.cfg.recorder.output_dir.strip():
+            target = Path(self.cfg.recorder.output_dir.strip())
+        else:
+            target = mapping.get(kind, self.paths.data_dir)
         target.mkdir(parents=True, exist_ok=True)
         try:
             os.startfile(str(target))  # type: ignore[attr-defined]
@@ -851,6 +1670,16 @@ class WireDeckApi:
             return {"ok": False}
 
     def shutdown(self) -> None:
+        if not self._preview_state:
+            try:
+                if self._recorder.is_recording:
+                    self._recorder.stop_recording(self.cfg, self.paths, win32_ops=self._win32_ops)
+            except Exception:
+                pass
+            try:
+                emit_plugin_hook(self.paths, "on_app_exit", _build_hook_context(self.cfg), win32_ops=self._win32_ops)
+            except Exception:
+                pass
         if self._bridge is not None:
             self._bridge.stop()
 
@@ -962,15 +1791,96 @@ def _acquire_single_instance_mutex(window_title: str) -> int | None:
         return None
 
 
-def _run_quick_play(
+def _build_hook_context(
+    cfg: AppConfig,
+    *,
+    silent: bool = False,
+    paths: AppPaths | None = None,
+    include_system_env: bool = True,
+    plugin_overrides: dict[str, dict[str, Any]] | None = None,
+    extra: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    peer_ip = cfg.wireless_peer_ip if cfg.active_transport == "wireless" else cfg.peer_ip
+    preset = get_preset(cfg.active_preset)
+    client_info = resolve_stream_client_info(preset.id, cfg.custom_client_path) if preset.uses_stream_client else {}
+    client_exe_path = str(client_info.get("exe_path") or "")
+    ctx: dict[str, Any] = {
+        "preset": cfg.active_preset,
+        "transport": cfg.active_transport,
+        "submode": cfg.wireless_submode,
+        "peer_ip": peer_ip,
+        "host_ip": cfg.host_ip,
+        "language": cfg.language,
+        "silent": bool(silent),
+        "client_pid": 0,
+        "client_exe": Path(client_exe_path).name if client_exe_path else "",
+        "client_exe_path": client_exe_path,
+        "client_name": str(client_info.get("name") or preset.official_client_name or preset.id),
+        "data_dir": str(paths.data_dir) if paths is not None else "",
+        "recorder": cfg.recorder.to_dict(),
+        "plugin_overrides": dict(plugin_overrides or {}),
+    }
+    if include_system_env:
+        try:
+            ctx["system_env"] = collect_system_env_cached()
+        except Exception:
+            ctx["system_env"] = {}
+    if extra:
+        ctx.update(extra)
+    return ctx
+
+
+def _parse_plugin_opt_args(raw_opts: list[str] | None) -> dict[str, dict[str, Any]]:
+    """Parse repeatable CLI `--plugin-opt plugin_id.key=value` flags cleanly."""
+    overrides: dict[str, dict[str, Any]] = {}
+    for item in raw_opts or []:
+        if "=" not in item or "." not in item.split("=", 1)[0]:
+            continue
+        lhs, rhs = item.split("=", 1)
+        pid, key = lhs.split(".", 1)
+        pid, key = pid.strip(), key.strip()
+        if not pid or not key:
+            continue
+        low = rhs.strip().lower()
+        val: Any
+        if low == "true":
+            val = True
+        elif low == "false":
+            val = False
+        else:
+            try:
+                val = int(rhs) if rhs.strip().isdigit() else float(rhs)
+            except ValueError:
+                val = rhs
+        overrides.setdefault(pid, {})[key] = val
+    return overrides
+
+
+def _log_quick_play_error(paths: AppPaths, tag: str, message: str) -> None:
+    try:
+        paths.logs_dir.mkdir(parents=True, exist_ok=True)
+        stamp = time.strftime("%Y-%m-%d %H:%M:%S")
+        line = f"[{stamp}] [{tag}] {message}\n"
+        with (paths.logs_dir / "quick_play.log").open("a", encoding="utf-8") as fh:
+            fh.write(line)
+    except OSError:
+        pass
+
+
+def _run_quick_play_detailed(
     api: WireDeckApi,
     *,
     preset_id: str | None = None,
     transport: str | None = None,
     submode: str | None = None,
     launch_fn: Callable[..., ActionResult] = launch_stream_client,
-) -> tuple[bool, str]:
-    """Activate the target transport if idle, then launch the preset stream client."""
+    silent: bool = False,
+    skip_plugins: bool = False,
+    plugin_overrides: dict[str, dict[str, Any]] | None = None,
+    win32_ops: Win32Ops | None = None,
+) -> tuple[bool, str, str, dict[str, Any]]:
+    """Activate the target transport if idle, run plugin hooks, and launch the stream client."""
+    ops = win32_ops or api._win32_ops
     if preset_id:
         api.cfg.switch_preset(preset_id)
     if transport in ("wired", "wireless"):
@@ -983,6 +1893,16 @@ def _run_quick_play(
     active_sub = api.cfg.wireless_submode
     fallback_view = "wireless" if active_t == "wireless" else "home"
 
+    ctx = _build_hook_context(
+        api.cfg,
+        silent=silent,
+        paths=api.paths,
+        plugin_overrides=plugin_overrides,
+        extra={"_recorder_callback": api._make_recorder_callback()},
+    )
+    if not skip_plugins:
+        emit_plugin_hook(api.paths, "before_quick_play", ctx, win32_ops=ops)
+
     if active_t == "wireless":
         w_snap = api._wireless_snapshot_fn(api.cfg, probe_network=False)
         w_rep = classify_wireless_snapshot(w_snap, api.cfg)
@@ -990,22 +1910,30 @@ def _run_quick_play(
             w3 = next((l for l in w_rep.layers if l.layer == "W3"), None)
             hs_on = bool(w3 and w3.metrics.get("hotspot_state") == "On")
             if not hs_on:
+                if not skip_plugins:
+                    emit_plugin_hook(api.paths, "before_transport_enable", ctx, win32_ops=ops)
                 res = api._execute_or_elevate("enable-hotspot", {"force": False})
                 if not res.ok:
-                    return False, fallback_view
+                    return False, fallback_view, res.message, {}
+                if not skip_plugins:
+                    emit_plugin_hook(api.paths, "after_transport_enable", ctx, win32_ops=ops)
         else:
             w1 = next((l for l in w_rep.layers if l.layer == "W1"), None)
             w2 = next((l for l in w_rep.layers if l.layer == "W2"), None)
             w4 = next((l for l in w_rep.layers if l.layer == "W4"), None)
             if w2 and w2.status == Severity.FAIL:
-                return False, fallback_view
+                return False, fallback_view, w2.summary or "Wi-Fi 尚未连接到路由器，请先连接 Wi-Fi", {}
             anti_on = bool(w4 and w4.metrics.get("anti_stutter_active"))
             if not anti_on:
                 if w1 and w1.status == Severity.FAIL:
-                    return False, fallback_view
+                    return False, fallback_view, w1.summary or "未检测到可用无线网卡", {}
+                if not skip_plugins:
+                    emit_plugin_hook(api.paths, "before_transport_enable", ctx, win32_ops=ops)
                 res = api._execute_or_elevate("optimize-wifi", {})
                 if not res.ok:
-                    return False, fallback_view
+                    return False, fallback_view, res.message, {}
+                if not skip_plugins:
+                    emit_plugin_hook(api.paths, "after_transport_enable", ctx, win32_ops=ops)
     else:
         snap = api._snapshot_fn(api.cfg, probe_network=False)
         rep = classify_snapshot(snap, api.cfg)
@@ -1013,44 +1941,103 @@ def _run_quick_play(
         nat_on = bool(l4 and l4.metrics.get("nat_active"))
         if not nat_on:
             if not rep.can_enable_direct:
-                return False, fallback_view
+                msg = rep.primary_fault.message if rep.primary_fault else (rep.headline or "有线直连前置条件未就绪")
+                return False, fallback_view, msg, {}
+            if not skip_plugins:
+                emit_plugin_hook(api.paths, "before_transport_enable", ctx, win32_ops=ops)
             res = api._execute_or_elevate("enable-direct", {})
             if not res.ok:
-                return False, fallback_view
+                return False, fallback_view, res.message, {}
+            if not skip_plugins:
+                emit_plugin_hook(api.paths, "after_transport_enable", ctx, win32_ops=ops)
 
     preset = get_preset(api.cfg.active_preset)
+    client_info = resolve_stream_client_info(preset.id, api.cfg.custom_client_path) if preset.uses_stream_client else {}
+    ctx["client_name"] = str(client_info.get("name") or preset.official_client_name or preset.id)
+    if client_info.get("exe_path"):
+        ctx["client_exe_path"] = str(client_info["exe_path"])
+        ctx["client_exe"] = Path(str(client_info["exe_path"])).name
+
+    if not skip_plugins:
+        emit_plugin_hook(api.paths, "before_client_launch", ctx, win32_ops=ops)
+
     if preset.uses_stream_client:
         custom = api.cfg.custom_client_path.strip()
-        if launch_fn is launch_stream_client or custom:
-            launch_res = launch_fn(preset_id=preset.id, custom_path=custom) if launch_fn is launch_stream_client else launch_fn(preset_id=preset.id)
+        if launch_fn is launch_stream_client:
+            launch_res = launch_fn(preset_id=preset.id, custom_path=custom)
         else:
             launch_res = launch_fn(preset_id=preset.id)
-        return (bool(launch_res.ok), "" if launch_res.ok else fallback_view)
-    return False, fallback_view
+        if not launch_res.ok:
+            return False, fallback_view, launch_res.message or "未检测到可用的串流客户端", dict(launch_res.details)
+        launch_details = dict(launch_res.details or {})
+        ctx["client_pid"] = int(launch_details.get("pid") or 0)
+        if launch_details.get("path"):
+            ctx["client_exe_path"] = str(launch_details["path"])
+        if launch_details.get("exe_name"):
+            ctx["client_exe"] = str(launch_details["exe_name"])
+        if launch_details.get("client_name"):
+            ctx["client_name"] = str(launch_details["client_name"])
+        if not skip_plugins:
+            emit_plugin_hook(api.paths, "after_client_launch", ctx, win32_ops=ops)
+            emit_plugin_hook(api.paths, "after_quick_play", ctx, win32_ops=ops)
+        return True, "", "", launch_details
+
+    if not skip_plugins:
+        emit_plugin_hook(api.paths, "after_quick_play", ctx, win32_ops=ops)
+    return True, "", "", {"client_name": preset.official_client_name or preset.id, "pid": 0, "exe_name": ""}
 
 
-def _run_quick_restore(api: WireDeckApi) -> tuple[bool, str]:
+def _run_quick_play(
+    api: WireDeckApi,
+    *,
+    preset_id: str | None = None,
+    transport: str | None = None,
+    submode: str | None = None,
+    launch_fn: Callable[..., ActionResult] = launch_stream_client,
+) -> tuple[bool, str]:
+    """Activate the target transport if idle, then launch the preset stream client."""
+    ok, fallback_view, _, _ = _run_quick_play_detailed(
+        api,
+        preset_id=preset_id,
+        transport=transport,
+        submode=submode,
+        launch_fn=launch_fn,
+        silent=False,
+        win32_ops=api._win32_ops,
+    )
+    return ok, fallback_view
+
+
+def _run_quick_restore(api: WireDeckApi, *, silent: bool = False) -> tuple[bool, str]:
     """Restore active wired WinNAT, 5G hotspot, and Wi-Fi anti-stutter tuning back to daily normal."""
+    ctx = _build_hook_context(api.cfg, silent=silent)
+    emit_plugin_hook(api.paths, "before_quick_restore", ctx, win32_ops=api._win32_ops)
+
     snap = api._snapshot_fn(api.cfg, probe_network=False)
     rep = classify_snapshot(snap, api.cfg)
     l4 = next((l for l in rep.layers if l.layer == "L4"), None)
     if l4 and l4.metrics.get("nat_active"):
+        emit_plugin_hook(api.paths, "before_transport_disable", ctx, win32_ops=api._win32_ops)
         res = api._execute_or_elevate("disable-direct", {})
         if not res.ok:
             return False, "home"
+        emit_plugin_hook(api.paths, "after_transport_disable", ctx, win32_ops=api._win32_ops)
 
     w_snap = api._wireless_snapshot_fn(api.cfg, probe_network=False)
     hs_on = str((w_snap.get("hotspot") or {}).get("state", "")).lower() == "on"
     if hs_on:
+        emit_plugin_hook(api.paths, "before_transport_disable", ctx, win32_ops=api._win32_ops)
         res = api._execute_or_elevate("disable-hotspot", {})
         if not res.ok:
             return False, "wireless"
+        emit_plugin_hook(api.paths, "after_transport_disable", ctx, win32_ops=api._win32_ops)
 
     if (api.paths.runtime_dir / "wifi_backup.json").is_file():
         res = api._execute_or_elevate("restore-wifi", {})
         if not res.ok:
             return False, "wireless"
 
+    emit_plugin_hook(api.paths, "after_quick_restore", ctx, win32_ops=api._win32_ops)
     return True, ""
 
 
@@ -1058,7 +2045,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="WireDeck", add_help=True)
     parser.add_argument(
         "--preview-state",
-        choices=["ready", "breakpoint", "wizard", "ai", "settings", "onboarding", "wireless", "wireless_lan", "wireless_wizard"],
+        choices=["ready", "breakpoint", "wizard", "ai", "settings", "onboarding", "wireless", "wireless_lan", "wireless_wizard", "plugins", "recorder"],
         default=None,
         help="Open GUI in deterministic read-only preview mode",
     )
@@ -1107,6 +2094,11 @@ def main(argv: list[str] | None = None) -> int:
         help="Restore active WinNAT sharing, hotspot, and Wi-Fi anti-stutter tuning",
     )
     parser.add_argument(
+        "--silent",
+        action="store_true",
+        help="Never pop up WireDeck GUI window on quick-play/restore; use silent tray notification on error",
+    )
+    parser.add_argument(
         "--transport",
         choices=["wired", "wireless"],
         default=None,
@@ -1118,24 +2110,96 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="Optional wireless submode override for --quick-play",
     )
+    parser.add_argument(
+        "--no-plugins",
+        action="store_true",
+        help="Skip plugin hooks during --quick-play (safe-mode launch)",
+    )
+    parser.add_argument(
+        "--plugin-opt",
+        action="append",
+        default=[],
+        help="Temporary plugin override in plugin_id.key=value format",
+    )
     args = parser.parse_args(argv)
 
     title = f"{APP_NAME} v{APP_VERSION}"
     api = WireDeckApi(preview_state=args.preview_state, preview_wizard_step=args.wizard_step)
+    plugin_overrides = _parse_plugin_opt_args(args.plugin_opt)
 
     if args.quick_play and not args.preview_state:
-        done, _ = _run_quick_play(
+        done, _, err_msg, launch_details = _run_quick_play_detailed(
             api,
             preset_id=args.preset,
             transport=args.transport,
             submode=args.submode,
+            silent=bool(args.silent),
+            skip_plugins=bool(args.no_plugins),
+            plugin_overrides=plugin_overrides,
+            win32_ops=api._win32_ops,
         )
         if done:
+            client_pid = int(launch_details.get("pid") or 0)
+            if args.silent:
+                try:
+                    health = api.get_system_health()
+                    for w in health.get("warnings") or []:
+                        if w.get("code") in ("ON_BATTERY", "REC_TARGET_OFFLINE"):
+                            api._win32_ops.show_notification("WireDeck", f"{w.get('title')}：{w.get('detail')}")
+                            break
+                except Exception:
+                    pass
+
+                def _graceful_sig(_signum: int, _frame: Any) -> None:
+                    try:
+                        if api._recorder.is_recording:
+                            api._recorder.stop_recording(api.cfg, api.paths, win32_ops=api._win32_ops)
+                    except Exception:
+                        pass
+                    if api.cfg.keep_awake_during_stream:
+                        try:
+                            api._win32_ops.set_keep_awake(False)
+                        except Exception:
+                            pass
+
+                for sig_name in ("SIGINT", "SIGTERM"):
+                    sig = getattr(signal, sig_name, None)
+                    if sig is not None:
+                        try:
+                            signal.signal(sig, _graceful_sig)
+                        except Exception:
+                            pass
+
+                api._start_session_supervisor(
+                    client_pid,
+                    launch_details,
+                    skip_plugins=bool(args.no_plugins),
+                    plugin_overrides=plugin_overrides,
+                    blocking=True,
+                )
+            else:
+                api._start_session_supervisor(
+                    client_pid,
+                    launch_details,
+                    skip_plugins=bool(args.no_plugins),
+                    plugin_overrides=plugin_overrides,
+                    blocking=False,
+                )
             return 0
+        if args.silent:
+            reason = err_msg or "配置前置条件未就绪或未找到串流客户端，请打开 WireDeck 检查"
+            _log_quick_play_error(api.paths, "quick-play", reason)
+            api._win32_ops.show_notification("WireDeck", reason)
+            return 1
     elif args.quick_restore and not args.preview_state:
-        done, _ = _run_quick_restore(api)
+        done, _ = _run_quick_restore(api, silent=bool(args.silent))
         if done:
             return 0
+        if args.silent:
+            reason = "一键恢复日常网络未完全成功，请打开 WireDeck 查看状态"
+            _log_quick_play_error(api.paths, "quick-restore", reason)
+            api._win32_ops.show_notification("WireDeck", reason)
+            return 1
 
     mutex_handle: int | None = None
     if not args.preview_state and not args.capture_to:
@@ -1184,6 +2248,16 @@ def main(argv: list[str] | None = None) -> int:
 
     def _on_started() -> None:
         _set_titlebar_theme(title, api.cfg.theme == "dark")
+        if not args.preview_state and not args.capture_to:
+            threading.Thread(
+                target=lambda: emit_plugin_hook(
+                    api.paths,
+                    "on_app_start",
+                    _build_hook_context(api.cfg),
+                    win32_ops=api._win32_ops,
+                ),
+                daemon=True,
+            ).start()
         if args.capture_to:
             out_p = Path(args.capture_to)
             _capture_window_screenshot(title, out_p, delay_sec=max(0.5, args.capture_delay))

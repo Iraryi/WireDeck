@@ -42,6 +42,16 @@
             <span data-i18n="nav_wizard">连机教程</span>
             <span class="nav-badge-dot" id="wizDot"></span>
           </button>
+          <button class="nav-item" data-nav="plugins" type="button">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M12 22v-5"/><path d="M9 8V2"/><path d="M15 8V2"/><path d="M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8z"/></svg>
+            <span data-i18n="nav_plugins">插件中心</span>
+            <span class="nav-badge-dot" id="pluginsDot"></span>
+          </button>
+          <button class="nav-item" data-nav="recorder" type="button">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><rect x="2" y="6" width="14" height="12" rx="2"/><polygon points="22 8 16 12 22 16 22 8"/></svg>
+            <span data-i18n="nav_recorder">录屏存储</span>
+            <span class="nav-badge-dot" id="recDot"></span>
+          </button>
           <button class="nav-item" data-nav="ai" type="button">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
             <span data-i18n="nav_ai">AI 接口</span>
@@ -213,6 +223,261 @@
           </div>
         </section>
 
+        <!-- VIEW 2B: PLUGINS & GITHUB PATCHES -->
+        <section class="view view-compact" id="viewPlugins">
+          <div class="page-head">
+            <div>
+              <div class="page-title" data-i18n="plugins_title">插件与补丁中心</div>
+              <div class="page-sub" data-i18n="plugins_sub">按需从 GitHub 拉取扩展补丁（补帧锐化 / 翻译 / 录屏等），保持核心轻量化</div>
+            </div>
+            <div class="row-actions">
+              <div class="seg-group" role="group">
+                <button class="seg-btn active" id="btnPluginTabCatalog" type="button" data-i18n="plugins_tab_catalog">GitHub 补丁库</button>
+                <button class="seg-btn" id="btnPluginTabInstalled" type="button" data-i18n="plugins_tab_installed">已安装</button>
+              </div>
+              <button class="btn btn-sm" id="btnPluginsRefresh" type="button" data-i18n="btn_refresh">刷新</button>
+            </div>
+          </div>
+
+          <div id="pluginsCatalogPane" class="plugins-pane">
+            <div class="plugins-toolbar">
+              <div class="cat-bar" id="pluginCatBar">
+                <button class="cat-chip active" type="button" data-cat="all" data-i18n="plugins_cat_all">全部</button>
+                <button class="cat-chip" type="button" data-cat="video-enhance" data-i18n="plugins_cat_video">补帧锐化</button>
+                <button class="cat-chip" type="button" data-cat="translation" data-i18n="plugins_cat_trans">翻译/AI</button>
+                <button class="cat-chip" type="button" data-cat="automation" data-i18n="plugins_cat_auto">联动/工具</button>
+              </div>
+              <div class="gh-install-bar">
+                <input id="pluginDirectUrlInput" class="mono gh-url-in" data-i18n-placeholder="plugins_gh_placeholder" placeholder="输入 GitHub 仓库 (owner/repo) 或补丁 JSON 链接" />
+                <button class="btn btn-sm" id="btnInstallDirectUrl" type="button" data-i18n="plugins_gh_install">拉取安装</button>
+              </div>
+            </div>
+            <div class="group-box compact-scroll plugins-list" id="pluginCatalogList"></div>
+          </div>
+
+          <div id="pluginsInstalledPane" class="plugins-pane" style="display:none;">
+            <div class="group-box compact-scroll plugins-list" id="pluginInstalledList"></div>
+          </div>
+
+          <div class="plugins-foot-strip">
+            <div class="row-actions">
+              <button class="btn btn-sm" id="btnOpenPluginsFolder" type="button" data-i18n="plugins_open_dir">打开插件目录</button>
+              <button class="btn btn-sm" id="btnPluginRegistryCfg" type="button" data-i18n="plugins_registry_btn">补丁源设置</button>
+            </div>
+            <button class="btn-link-subtle" id="btnPluginHooksOverview" type="button" data-i18n="plugins_hooks_btn">查看开放接入口 (Hooks)</button>
+          </div>
+        </section>
+
+        <!-- VIEW 2C: RECORDING & EXTERNAL STORAGE -->
+        <section class="view view-compact" id="viewRecorder">
+          <div class="page-head">
+            <div>
+              <div class="page-title" data-i18n="rec_title">录屏与外接存储</div>
+              <div class="page-sub" data-i18n="rec_sub">普适接入 OBS / NVIDIA / Game Bar / FFmpeg 等，直存外接 U盘/exFAT 不占本机硬盘</div>
+            </div>
+            <div class="row-actions">
+              <div class="seg-group" role="group">
+                <button class="seg-btn active" id="btnRecTabControl" type="button" data-i18n="rec_tab_control">录屏控制</button>
+                <button class="seg-btn" id="btnRecTabStorage" type="button" data-i18n="rec_tab_storage">存储与归档</button>
+                <button class="seg-btn" id="btnRecTabClips" type="button" data-i18n="rec_tab_clips">片段库</button>
+              </div>
+              <button class="btn btn-sm" id="btnRecRefresh" type="button" data-i18n="btn_refresh">刷新</button>
+            </div>
+          </div>
+
+          <div class="control-bar rec-bar">
+            <div class="ctrl-left">
+              <span class="status-led idle" id="recLed"></span>
+              <div>
+                <div class="ctrl-title" id="recStatusTitle" data-i18n="rec_status_idle">待命</div>
+                <div class="ctrl-meta mono" id="recStatusMeta">—</div>
+              </div>
+            </div>
+            <div class="ctrl-actions">
+              <button class="btn btn-sm btn-primary" id="btnRecToggle" type="button" data-i18n="rec_btn_start">开始录制</button>
+              <button class="btn btn-sm" id="btnRecSplitNow" type="button" style="display:none;" data-i18n="rec_btn_split_now">立即切段</button>
+              <button class="btn btn-sm" id="btnRecReplay" type="button" data-i18n="rec_btn_replay">保存回放</button>
+              <button class="btn btn-sm" id="btnRecOpenDir" type="button" data-i18n="rec_btn_open_dir">打开目录</button>
+            </div>
+          </div>
+
+          <!-- PANE 1: RECORDER CONTROL -->
+          <div id="recControlPane" class="rec-pane">
+            <div class="group-box rec-form-scroll">
+              <div class="setting-row compact">
+                <span class="setting-label" data-i18n="rec_backend">录制外延工具</span>
+                <div class="row-actions">
+                  <span class="ext-tag" id="recBackendBadge">AUTO</span>
+                  <select id="recBackendSelect">
+                    <option value="auto" data-i18n="rec_bk_auto">自动择优（OBS → NVIDIA → FFmpeg → Game Bar）</option>
+                    <option value="obs">OBS Studio</option>
+                    <option value="nvidia">NVIDIA App / ShadowPlay</option>
+                    <option value="gamebar">Windows Game Bar</option>
+                    <option value="ffmpeg" data-i18n="rec_bk_ffmpeg">内置轻量直录（FFmpeg NVENC）</option>
+                    <option value="custom" data-i18n="rec_bk_custom">自定义外延录屏程序</option>
+                  </select>
+                </div>
+              </div>
+              <div class="setting-row compact">
+                <span class="setting-label" data-i18n="rec_mode">工作模式与联动</span>
+                <div class="row-actions" style="gap:10px;">
+                  <label class="inline-check">
+                    <input type="checkbox" id="recAutoLink" />
+                    <span data-i18n="rec_auto_link">随一键开玩静默启停并归档</span>
+                  </label>
+                  <select id="recModeSelect">
+                    <option value="replay" data-i18n="rec_mode_replay">仅开回放缓存（省空间）</option>
+                    <option value="auto_record" data-i18n="rec_mode_auto">开玩全程自动录像</option>
+                    <option value="manual" data-i18n="rec_mode_manual">仅手动控制（不自动触发）</option>
+                  </select>
+                </div>
+              </div>
+              <div class="setting-row compact">
+                <span class="setting-label" data-i18n="rec_split_lbl">自动分段切割</span>
+                <div class="row-actions rec-split-inputs">
+                  <select id="recSplitMode">
+                    <option value="off" data-i18n="rec_split_off">不切割（单文件）</option>
+                    <option value="time" data-i18n="rec_split_time">按时长切割</option>
+                    <option value="size" data-i18n="rec_split_size">按文件大小切割</option>
+                    <option value="both" data-i18n="rec_split_both">时长 / 大小先到即切</option>
+                  </select>
+                  <span class="rec-unit-wrap" id="recSplitMinWrap">
+                    <input id="recSplitMinutes" class="mono" type="number" min="1" max="240" value="30" style="width:54px;" />
+                    <span class="row-desc" data-i18n="rec_unit_min">分</span>
+                  </span>
+                  <span class="rec-unit-wrap" id="recSplitSizeWrap">
+                    <input id="recSplitSizeMb" class="mono" type="number" min="50" max="32768" step="64" value="2048" style="width:66px;" />
+                    <span class="row-desc">MB</span>
+                  </span>
+                  <span class="ext-tag" id="recSplitFat32Badge" style="display:none;" data-i18n="rec_fat32_guard">FAT32 ≤3800MB</span>
+                </div>
+              </div>
+              <div class="setting-row compact">
+                <div style="min-width:0;">
+                  <span class="setting-label" data-i18n="rec_naming_lbl">文件命名规则（强制 1_ 2_ 3_ 序号）</span>
+                  <div class="rec-name-preview mono" id="recFilenamePreview">1_xbox_20261127_231500.mkv</div>
+                </div>
+                <div class="rec-naming-ctrl">
+                  <div class="row-actions" style="gap:4px;">
+                    <span class="ext-tag mono rec-seq-lock" title="Mandatory prefix">1_</span>
+                    <input id="recFilenameTemplate" class="mono" style="width:170px;" value="{preset}_{date}_{time}" data-i18n-placeholder="rec_tpl_ph" placeholder="{preset}_{date}_{time}" />
+                  </div>
+                  <div class="rec-token-row">
+                    <button type="button" class="rec-token-chip mono" data-rec-token="{preset}">{preset}</button>
+                    <button type="button" class="rec-token-chip mono" data-rec-token="{date}">{date}</button>
+                    <button type="button" class="rec-token-chip mono" data-rec-token="{time}">{time}</button>
+                    <button type="button" class="rec-token-chip mono" data-rec-token="{backend}">{backend}</button>
+                  </div>
+                </div>
+              </div>
+              <div class="setting-row compact" id="recObsRow">
+                <span class="setting-label" data-i18n="rec_obs_sync_lbl">OBS 原生配置同步</span>
+                <div class="row-actions">
+                  <span class="ext-tag ext-tag-warn" id="recObsSyncWarn" style="display:none;" data-i18n="rec_obs_unsynced">未同步</span>
+                  <span class="row-desc mono" id="recObsMeta">—</span>
+                  <button class="btn btn-sm" id="btnRecSyncObs" type="button" data-i18n="rec_btn_sync_obs">同步目录与分段到 OBS</button>
+                </div>
+              </div>
+              <div class="setting-row compact" id="recFfmpegRow" style="display:none;">
+                <span class="setting-label" data-i18n="rec_ff_params">FFmpeg 封装 / 编码 / 码率</span>
+                <div class="row-actions">
+                  <select id="recFfFormat">
+                    <option value="mkv">MKV（防断电损坏）</option>
+                    <option value="mp4">MP4</option>
+                    <option value="mov">MOV</option>
+                    <option value="ts">TS</option>
+                    <option value="flv">FLV</option>
+                  </select>
+                  <select id="recFfEncoder">
+                    <option value="auto" data-i18n="rec_ff_enc_auto">自动 NVENC (AV1/HEVC)</option>
+                    <option value="av1_nvenc">AV1 NVENC</option>
+                    <option value="hevc_nvenc">HEVC NVENC</option>
+                    <option value="h264_nvenc">H.264 NVENC</option>
+                    <option value="libx264">CPU x264</option>
+                  </select>
+                  <select id="recFfAudio">
+                    <option value="" data-i18n="rec_ff_audio_off">仅录画面</option>
+                    <option value="auto" data-i18n="rec_ff_audio_auto">自动采集系统音</option>
+                  </select>
+                  <input id="recFfBitrate" class="mono" type="number" min="2" max="60" value="10" style="width:58px;" />
+                  <span class="row-desc">Mbps</span>
+                  <input id="recFfExe" class="mono" placeholder="ffmpeg.exe" style="width:105px;" />
+                  <button class="btn btn-sm" id="btnRecPickFf" type="button" data-i18n="plugins_browse">浏览</button>
+                </div>
+              </div>
+              <div class="setting-row compact" id="recCustomRow" style="display:none;">
+                <span class="setting-label" data-i18n="rec_custom_exe">自定义录制程序 (.exe)</span>
+                <div class="row-actions">
+                  <input id="recCustomExe" class="mono" placeholder="C:\Tools\Recorder.exe" style="width:260px;" />
+                  <button class="btn btn-sm" id="btnRecPickCustom" type="button" data-i18n="plugins_browse">浏览</button>
+                </div>
+              </div>
+              <div class="setting-row compact">
+                <span class="setting-label" data-i18n="rec_hotkeys">录制 / 回放热键</span>
+                <div class="row-actions">
+                  <input id="recHotkeyRecord" class="mono" data-i18n-placeholder="rec_hk_record_ph" placeholder="录制热键（留空默认）" style="width:150px;" />
+                  <input id="recHotkeyReplay" class="mono" data-i18n-placeholder="rec_hk_replay_ph" placeholder="回放热键（留空默认）" style="width:150px;" />
+                  <button class="btn btn-sm btn-primary" id="btnRecSaveControl" type="button" data-i18n="btn_save">保存</button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- PANE 2: STORAGE & OFFLOAD -->
+          <div id="recStoragePane" class="rec-pane" style="display:none;">
+            <div class="group-box">
+              <div class="setting-row compact">
+                <span class="setting-label" data-i18n="rec_target_dir">目标录像文件夹（外接盘/U盘）</span>
+                <div class="row-actions">
+                  <input id="recOutputDir" class="mono" style="width:255px;" data-i18n-placeholder="rec_output_dir_ph" placeholder="例如 E:\XboxClips" />
+                  <button class="btn btn-sm" id="btnRecBrowseDir" type="button" data-i18n="plugins_browse">浏览</button>
+                  <button class="btn btn-sm btn-primary" id="btnRecSaveStorage" type="button" data-i18n="btn_save">保存</button>
+                </div>
+              </div>
+              <div class="setting-row compact">
+                <span class="setting-label" data-i18n="rec_fallback_dir">U盘掉线备用暂存目录</span>
+                <div class="row-actions">
+                  <input id="recFallbackDir" class="mono" style="width:205px;" data-i18n-placeholder="rec_fallback_dir_ph" placeholder="可选，如 D:\WireDeckTemp" />
+                  <button class="btn btn-sm" id="btnRecBrowseFallback" type="button" data-i18n="plugins_browse">浏览</button>
+                  <button class="btn btn-sm" id="btnRecMigrateFallback" type="button" style="display:none;" data-i18n="rec_btn_migrate_fb">迁回主盘</button>
+                </div>
+              </div>
+              <div class="setting-row compact">
+                <span class="setting-label" data-i18n="rec_offload_cfg">自动归档与配额保护</span>
+                <div class="row-actions" style="gap:7px;flex-wrap:wrap;justify-content:flex-end;">
+                  <label class="inline-check">
+                    <input type="checkbox" id="recAutoOffload" checked />
+                    <span data-i18n="rec_auto_offload">结束后校验搬运</span>
+                  </label>
+                  <label class="inline-check">
+                    <input type="checkbox" id="recApplyNamingOnOffload" checked />
+                    <span data-i18n="rec_apply_naming">按序号模板重命名</span>
+                  </label>
+                  <label class="inline-check">
+                    <input type="checkbox" id="recAutoPrune" />
+                    <span data-i18n="rec_auto_prune">超限清理最旧</span>
+                  </label>
+                  <input id="recMaxGb" class="mono" type="number" min="0" step="5" value="0" style="width:62px;" title="Max GB (0=unlimited)" />
+                  <span class="row-desc">GB</span>
+                  <button class="btn btn-sm" id="btnRecOffloadNow" type="button" data-i18n="rec_btn_offload">立即归档</button>
+                  <button class="btn btn-sm" id="btnRecPruneNow" type="button" data-i18n="rec_btn_prune">按配额清理</button>
+                </div>
+              </div>
+            </div>
+            <div class="sec-label" data-i18n="rec_drives_heading">可用磁盘一键设为录像盘（兼容 exFAT / NTFS / FAT32）</div>
+            <div class="group-box compact-scroll rec-scroll-box" id="recDrivesList"></div>
+          </div>
+
+          <!-- PANE 3: CLIPS LIBRARY -->
+          <div id="recClipsPane" class="rec-pane" style="display:none;">
+            <div class="sec-row">
+              <span class="sec-label" style="margin:0;" id="recClipsSummary">—</span>
+              <span class="ext-tag" data-i18n="rec_native_formats_badge">原生兼容 MKV / MP4 / MOV / FLV / TS</span>
+            </div>
+            <div class="group-box compact-scroll rec-scroll-box" id="recClipsList"></div>
+          </div>
+        </section>
+
         <!-- VIEW 3: AI / DSH PORT -->
         <section class="view" id="viewAi">
           <div class="page-head">
@@ -310,18 +575,30 @@
             </div>
             <div class="setting-row compact">
               <span class="setting-label" data-i18n="set_language">界面语言</span>
-              <select id="setLanguage">
-                <option value="zh-CN">简体中文</option>
-                <option value="zh-TW">繁體中文</option>
-                <option value="en">English</option>
-                <option value="ja">日本語</option>
-              </select>
+              <div class="row-actions" style="gap:10px;">
+                <label class="inline-check">
+                  <input type="checkbox" id="setAutoRestoreExit" />
+                  <span data-i18n="set_auto_restore_exit">退出自动恢复网络</span>
+                </label>
+                <select id="setLanguage">
+                  <option value="zh-CN">简体中文</option>
+                  <option value="zh-TW">繁體中文</option>
+                  <option value="en">English</option>
+                  <option value="ja">日本語</option>
+                </select>
+              </div>
             </div>
             <div class="setting-row compact">
               <span class="setting-label" data-i18n="set_eth">有线网卡</span>
-              <select id="setEth">
-                <option value="" data-i18n="set_eth_auto">自动识别（推荐）</option>
-              </select>
+              <div class="row-actions" style="gap:10px;">
+                <label class="inline-check">
+                  <input type="checkbox" id="setKeepAwake" checked />
+                  <span data-i18n="set_keep_awake">串流防息屏</span>
+                </label>
+                <select id="setEth">
+                  <option value="" data-i18n="set_eth_auto">自动识别（推荐）</option>
+                </select>
+              </div>
             </div>
             <div class="setting-row compact">
               <span class="setting-label" data-i18n="set_wifi">无线网卡</span>
@@ -390,6 +667,8 @@
         <button class="sb-link" id="sbProfile" type="button">Xbox Series X|S / One</button>
         <span class="sb-sep">|</span>
         <span class="mono" id="sbSubnet">192.168.50.2 → 192.168.50.1</span>
+        <span class="sb-sep">|</span>
+        <button class="sb-link" id="sbHealthBtn" type="button" data-i18n="sb_health_ok">● 系统就绪</button>
       </div>
       <div class="sb-group">
         <button class="sb-link" id="btnLaunchStream" type="button" data-i18n="footer_launch">启动串流端</button>
@@ -469,6 +748,51 @@
       <div class="modal-actions">
         <button class="btn btn-sm" id="btnBridgeDeny" type="button" data-i18n="bridge_req_deny">拒绝</button>
         <button class="btn btn-sm btn-primary" id="btnBridgeAllow" type="button" data-i18n="bridge_req_allow">授权并执行</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Plugin Dynamic Settings & Actions Modal -->
+  <div class="modal-backdrop" id="pluginConfigModal">
+    <div class="modal modal-wide modal-plugin">
+      <div class="modal-title" id="pluginConfigTitle">插件设置</div>
+      <div class="plugin-cfg-banner" id="pluginConfigBanner" style="display:none;"></div>
+      <div class="plugin-cfg-actions" id="pluginConfigActions"></div>
+      <div class="plugin-cfg-form detail-scroll" id="pluginConfigForm"></div>
+      <div class="modal-actions">
+        <button class="btn btn-sm" id="btnPluginCfgCancel" type="button" data-i18n="btn_cancel">取消</button>
+        <button class="btn btn-sm btn-primary" id="btnPluginCfgSave" type="button" data-i18n="btn_save">保存</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Plugin Registry URL Modal -->
+  <div class="modal-backdrop" id="pluginRegistryModal">
+    <div class="modal">
+      <div class="modal-title" data-i18n="plugins_registry_title">GitHub 补丁源配置</div>
+      <div class="modal-body" data-i18n="plugins_registry_desc">可指向自定义 GitHub Raw index.json，留空则使用官方默认补丁库。</div>
+      <input id="pluginRegistryInput" class="mono" style="width:100%;" placeholder="https://raw.githubusercontent.com/Iraryi/WireDeck/main/registry/index.json" />
+      <div class="modal-actions">
+        <button class="btn btn-sm" id="btnPluginRegReset" type="button" data-i18n="plugins_registry_reset">恢复官方源</button>
+        <button class="btn btn-sm" id="btnPluginRegCancel" type="button" data-i18n="btn_cancel">取消</button>
+        <button class="btn btn-sm btn-primary" id="btnPluginRegSave" type="button" data-i18n="btn_save">保存</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Rename Clip Dialog (Enforces leading 1_ / 2_ / 3_ prefix) -->
+  <div class="modal-backdrop" id="renameClipModal">
+    <div class="modal">
+      <div class="modal-title" data-i18n="rec_rename_title">重命名录像片段</div>
+      <div class="modal-body" data-i18n="rec_rename_desc">最前方的顺序编号（1_ / 2_ / 3_）为强制保留前缀，可自由修改后半段名称：</div>
+      <div class="row-actions" style="width:100%;gap:6px;">
+        <span class="ext-tag mono rec-seq-lock" id="renameClipSeqPrefix">1_</span>
+        <input id="renameClipInput" class="mono" style="flex:1;min-width:0;" />
+        <span class="ext-tag mono" id="renameClipExt">.mkv</span>
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-sm" id="btnRenameClipCancel" type="button" data-i18n="btn_cancel">取消</button>
+        <button class="btn btn-sm btn-primary" id="btnRenameClipOk" type="button" data-i18n="btn_save">保存</button>
       </div>
     </div>
   </div>

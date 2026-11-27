@@ -1,0 +1,122 @@
+{
+  "schema": "wiredeck-plugin/v2",
+  "id": "nvidia-driver-toolkit",
+  "name": "NVIDIA 驱动更新与双显卡调度工具包",
+  "version": "1.0.0",
+  "author": "WireDeck Official",
+  "category": "video-enhance",
+  "description": "自动识别笔记本 NVIDIA 显卡型号、在线检索并拉取官方最新 Game Ready / Studio 驱动安装包，一键将串流客户端与小黄鸭锁定到高性能 NVIDIA 独显（免去核显抢帧/黑屏），并提供 RTX 40/50 系 Smooth Motion 引导。",
+  "homepage": "https://github.com/Iraryi/WireDeck/tree/main/registry/plugins/nvidia-driver-toolkit",
+  "capabilities": ["video-enhance", "automation"],
+  "preset_scope": ["all"],
+  "enabled_by_default": true,
+  "requires_admin": false,
+  "timeout_sec": 20,
+  "hooks": {
+    "before_client_launch": "hooks/before_client_launch.ps1"
+  },
+  "actions": [
+    {
+      "id": "check_driver",
+      "label": "检查 NVIDIA 最新驱动",
+      "script": "actions/check_driver.ps1",
+      "description": "在线查询 NVIDIA 官方库，匹配当前显卡对应的最新 Game Ready 或 Studio 驱动版本与下载直链",
+      "style": "primary"
+    },
+    {
+      "id": "download_driver",
+      "label": "下载官方驱动安装包",
+      "script": "actions/download_driver.ps1",
+      "description": "从 NVIDIA 官方 HTTPS 下载通道拉取最新签名的驱动安装包到「下载」文件夹",
+      "style": "default"
+    },
+    {
+      "id": "bind_dgpu",
+      "label": "锁定串流端/小黄鸭用独显",
+      "script": "actions/bind_dgpu.ps1",
+      "description": "在 Windows DirectX 首选项中将当前串流程序与小黄鸭设置为「高性能 NVIDIA GPU」（免 UAC 弹窗）",
+      "style": "default"
+    },
+    {
+      "id": "reset_dgpu",
+      "label": "还原默认显卡调度",
+      "script": "actions/reset_dgpu.ps1",
+      "description": "撤销 WireDeck 写入的独显偏好，恢复 Windows 默认调度",
+      "style": "default"
+    },
+    {
+      "id": "open_nvidia_app",
+      "label": "打开 NVIDIA App",
+      "script": "actions/open_nvidia_app.ps1",
+      "description": "拉起本机 NVIDIA App 以开启 RTX 40/50 系驱动级 Smooth Motion 或超低延迟",
+      "style": "default"
+    }
+  ],
+  "settings_schema": [
+    {
+      "key": "driver_branch",
+      "type": "select",
+      "label": "驱动分支偏好",
+      "description": "Game Ready 面向最新游戏与特性（含 RTX 40/50 Smooth Motion）；Studio 侧重长期稳定",
+      "default": "game_ready",
+      "options": [
+        { "value": "game_ready", "label": "Game Ready 驱动（推荐游戏串流）" },
+        { "value": "studio", "label": "Studio 驱动（长期稳定）" }
+      ]
+    },
+    {
+      "key": "download_region",
+      "type": "select",
+      "label": "NVIDIA 官方下载节点",
+      "description": "简体中文环境自动优先中国官网 CDN（cn.download.nvidia.com）",
+      "default": "auto",
+      "options": [
+        { "value": "auto", "label": "自动匹配语言区域" },
+        { "value": "cn", "label": "中国大陆官方节点（cn）" },
+        { "value": "global", "label": "全球英文官方节点（us）" }
+      ]
+    },
+    {
+      "key": "auto_open_installer",
+      "type": "bool",
+      "label": "驱动下载完成后自动打开安装向导",
+      "description": "拉取官方驱动包完成后自动启动安装程序",
+      "default": true
+    },
+    {
+      "key": "auto_bind_dgpu",
+      "type": "bool",
+      "label": "开玩前自动为串流客户端锁定高性能独显",
+      "description": "解决双显卡笔记本在核显下强行开补帧/锐化导致帧率减半或掉帧问题",
+      "default": true
+    },
+    {
+      "key": "bind_enhancer_dgpu",
+      "type": "bool",
+      "label": "同时将 Lossless Scaling / Magpie 锁定独显",
+      "description": "确保缩放补帧计算始终运行在独立显卡上",
+      "default": true
+    },
+    {
+      "key": "latest_version",
+      "type": "text",
+      "label": "最近检测到的官方版本",
+      "description": "点击上方「检查 NVIDIA 最新驱动」自动更新",
+      "default": "",
+      "placeholder": "尚未检测"
+    },
+    {
+      "key": "latest_url",
+      "type": "text",
+      "label": "官方驱动安装包直链（只读参考）",
+      "description": "仅允许 https://*.download.nvidia.com 安全域名拉取",
+      "default": "",
+      "placeholder": "尚未检测"
+    }
+  ],
+  "diagnostic_check": "check.ps1",
+  "requirements": {
+    "summary": "适用于配备 NVIDIA GeForce RTX / GTX 显卡的笔记本与台式机",
+    "install_hint": "点击「配置」即可查看当前驱动状态、在线检测最新版或锁定双显卡独显调度"
+  }
+}

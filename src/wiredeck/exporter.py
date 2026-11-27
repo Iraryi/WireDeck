@@ -116,6 +116,7 @@ def export_diagnostic_bundle(
     out_path: Path | None = None,
     *,
     username: str | None = None,
+    system_health: dict[str, Any] | None = None,
 ) -> tuple[Path, str]:
     """Export sanitized diagnostic JSON bundle and return (bundle_path, dsh_prompt)."""
     target = Path(out_path) if out_path is not None else (paths.exports_dir / "diagnostic_latest.json")
@@ -133,6 +134,7 @@ def export_diagnostic_bundle(
         "config": cfg.to_dict(),
         "available_toolkits": toolkits,
         "report": report.to_dict(),
+        "system_health": system_health or {},
         "recent_logs": _collect_recent_logs(paths),
     }
     sanitized = sanitize_payload(raw_bundle, username=username)

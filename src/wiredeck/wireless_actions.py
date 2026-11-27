@@ -134,7 +134,7 @@ Remove-NetFirewallRule -DisplayName {_ps_quote(FW_RULE_NAT)} -ErrorAction Silent
 Remove-NetFirewallRule -DisplayName {_ps_quote(FW_RULE_DIRECT)} -ErrorAction SilentlyContinue
 """
 
-    prefer_5g = "1" if cfg.hotspot_prefer_5ghz else "0"
+    band_mode = cfg.hotspot_band if getattr(cfg, "hotspot_band", "") in ("5ghz", "2.4ghz", "auto") else ("5ghz" if cfg.hotspot_prefer_5ghz else "auto")
     script = f"""
 {pre_clean_wired}
 {_WINRT_HELPER_PS}
@@ -149,52 +149,125 @@ $tm = [Windows.Networking.NetworkOperators.NetworkOperatorTetheringManager]::Cre
 $ap = $tm.GetCurrentAccessPointConfiguration()
 $wasOn = ([string]$tm.TetheringOperationalState -eq 'On')
 $origBand = [string]$ap.Band
-if ('{prefer_5g}' -eq '1') {{
+$band5 = [Windows.Networking.NetworkOperators.TetheringWiFiBand]::FiveGigahertz
+$band24 = [Windows.Networking.NetworkOperators.TetheringWiFiBand]::TwoPointFourGigahertz
+$bandAuto = [Windows.Networking.NetworkOperators.TetheringWiFiBand]::Auto
+$targetBandEnum = $bandAuto
+$targetBandStr = 'Auto'
+if ('{band_mode}' -eq '5ghz' -and $ap.IsBandSupported($band5)) {{
+  $targetBandEnum = $band5
+  $targetBandStr = 'FiveGigahertz'
+}} elseif ('{band_mode}' -eq '2.4ghz' -and $ap.IsBandSupported($band24)) {{
+  $targetBandEnum = $band24
+  $targetBandStr = 'TwoPointFourGigahertz'
+}}
+
+if ($origBand -ne $targetBandStr) {{
   try {{
-    $band5 = [Windows.Networking.NetworkOperators.TetheringWiFiBand]::FiveGigahertz
-    if ($ap.IsBandSupported($band5) -and $origBand -ne 'FiveGigahertz') {{
-      if ($wasOn) {{
-        $null = Await-WinRTOp ($tm.StopTetheringAsync()) ([Windows.Networking.NetworkOperators.NetworkOperatorTetheringOperationResult])
-        $ap = $tm.GetCurrentAccessPointConfiguration()
-      }}
-      $ap.Band = $band5
-      Await-WinRTAction ($tm.ConfigureAccessPointAsync($ap))
+    if ($wasOn) {{
+      $null = Await-WinRTOp ($tm.StopTetheringAsync()) ([Windows.Networking.NetworkOperators.NetworkOperatorTetheringOperationResult])
+      $ap = $tm.GetCurrentAccessPointConfiguration()
+    }}
+    $ap.Band = $targetBandEnum
+    Await-WinRTAction ($tm.ConfigureAccessPointAsync($ap))
+  }} catch {{}}
+}}
+
+$fallbackFrom5g = $false
+$started = $false
+if ([string]$tm.TetheringOperationalState -eq 'On') {{
+  $started = $true
+}} else {{
+  try {{
+    $opRes = Await-WinRTOp ($tm.StartTetheringAsync()) ([Windows.Networking.NetworkOperators.NetworkOperatorTetheringOperationResult])
+    if ([string]$opRes.Status -eq 'Success') {{
+      $started = $true
     }}
   }} catch {{}}
 }}
-if ([string]$tm.TetheringOperationalState -ne 'On') {{
-  $opRes = Await-WinRTOp ($tm.StartTetheringAsync()) ([Windows.Networking.NetworkOperators.NetworkOperatorTetheringOperationResult])
-  if ([string]$opRes.Status -ne 'Success') {{
-    throw ("TETHER_START_FAILED:" + [string]$opRes.Status)
+
+if (-not $started -and '{band_mode}' -eq '5ghz') {{
+  try {{
+    if ([string]$tm.TetheringOperationalState -eq 'On') {{
+      $null = Await-WinRTOp ($tm.StopTetheringAsync()) ([Windows.Networking.NetworkOperators.NetworkOperatorTetheringOperationResult])
+    }}
+    $ap2 = $tm.GetCurrentAccessPointConfiguration()
+    $fbEnum = if ($ap2.IsBandSupported($band24)) {{ $band24 }} else {{ $bandAuto }}
+    $ap2.Band = $fbEnum
+    Await-WinRTAction ($tm.ConfigureAccessPointAsync($ap2))
+    $opRes2 = Await-WinRTOp ($tm.StartTetheringAsync()) ([Windows.Networking.NetworkOperators.NetworkOperatorTetheringOperationResult])
+    if ([string]$opRes2.Status -eq 'Success') {{
+      $started = $true
+      $fallbackFrom5g = $true
+    }} else {{
+      throw ("TETHER_START_FAILED:" + [string]$opRes2.Status)
+    }}
+  }} catch {{
+    throw
   }}
+}} elseif (-not $started) {{
+  throw "TETHER_START_FAILED:StartFailed"
 }}
+
 $finalAp = $tm.GetCurrentAccessPointConfiguration()
 [ordered]@{{
   state = [string]$tm.TetheringOperationalState
   band = [string]$finalAp.Band
   ssid = [string]$finalAp.Ssid
+  fallback_from_5g = $fallbackFrom5g
 }} | ConvertTo-Json -Compress
 """
     res = runner(script, 25)
     log_file = _append_bom_log(
         paths,
         "enable-hotspot",
-        [f"prefer_5g={cfg.hotspot_prefer_5ghz}, force={force}, rc={res.returncode}, stdout={res.stdout.strip()}, stderr={res.stderr.strip()}"],
+        [f"band_mode={band_mode}, prefer_5g={cfg.hotspot_prefer_5ghz}, force={force}, rc={res.returncode}, stdout={res.stdout.strip()}, stderr={res.stderr.strip()}"],
     )
     if res.returncode != 0:
+        err_blob = f"{res.stderr}\n{res.stdout}"
+        if "NO_CONNECTION_PROFILE" in err_blob:
+            return ActionResult(
+                ok=False,
+                code="NO_UPSTREAM_NETWORK",
+                message="Windows 移动热点要求电脑至少先接入任意网络（校园 Wi-Fi、网线或手机 USB 共享均可）",
+                exit_code=1,
+                details={"stderr": res.stderr.strip()},
+                log_file=log_file,
+            )
         return ActionResult(
             ok=False,
             code="ENABLE_HOTSPOT_FAILED",
-            message="开启 5 GHz 热点失败，请确认上游已联网且无线网卡未被占用",
+            message="开启移动热点失败，请确认上游已联网且无线网卡未被占用",
             exit_code=1,
             details={"stderr": res.stderr.strip()},
             log_file=log_file,
         )
+
+    actual_band = ""
+    fallback_from_5g = False
+    try:
+        parsed_hs = json.loads(res.stdout.strip().splitlines()[-1]) if res.stdout.strip() else {}
+        if isinstance(parsed_hs, dict):
+            actual_band = str(parsed_hs.get("band") or "")
+            fallback_from_5g = bool(parsed_hs.get("fallback_from_5g", False))
+    except Exception:
+        pass
+
+    if fallback_from_5g:
+        hs_msg = "移动热点已开启（2.4 GHz — 因网卡/上游频段限制，已自动由 5 GHz 降级兼容）"
+    elif band_mode == "2.4ghz" or "two" in actual_band.lower():
+        hs_msg = "移动热点已开启（2.4 GHz 频段）"
+    elif "five" in actual_band.lower():
+        hs_msg = "移动热点已开启（5 GHz 频段）"
+    else:
+        hs_msg = "移动热点已开启"
+
     return ActionResult(
         ok=True,
         code="HOTSPOT_ENABLED",
-        message="移动热点已开启（已优先锁定 5 GHz）",
+        message=hs_msg,
         exit_code=0,
+        details={"band": actual_band, "band_mode": band_mode, "fallback_from_5g": fallback_from_5g},
         log_file=log_file,
     )
 

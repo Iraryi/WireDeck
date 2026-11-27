@@ -19,7 +19,7 @@ from typing import Any, Callable
 
 from wiredeck.actions import execute_action
 from wiredeck.bridge import LocalBridgeServer
-from wiredeck.config import AppConfig, load_config, normalize_recorder_settings, save_config
+from wiredeck.config import AppConfig, VALID_HOTSPOT_BANDS, load_config, normalize_recorder_settings, save_config
 from wiredeck.diagnostics import classify_snapshot, run_diagnosis
 from wiredeck.exporter import export_diagnostic_bundle
 from wiredeck.extensions import discover_extensions, inspect_extensions, run_extension
@@ -604,8 +604,14 @@ class WireDeckApi:
             self.cfg.uplink_interface = str(patch["uplink_interface"] or "")
         if "wifi_interface" in patch:
             self.cfg.wifi_interface = str(patch["wifi_interface"] or "")
-        if "hotspot_prefer_5ghz" in patch:
+        if "hotspot_band" in patch:
+            hb = str(patch["hotspot_band"] or "").strip().lower()
+            if hb in VALID_HOTSPOT_BANDS:
+                self.cfg.hotspot_band = hb
+                self.cfg.hotspot_prefer_5ghz = hb == "5ghz"
+        elif "hotspot_prefer_5ghz" in patch:
             self.cfg.hotspot_prefer_5ghz = bool(patch["hotspot_prefer_5ghz"])
+            self.cfg.hotspot_band = "5ghz" if self.cfg.hotspot_prefer_5ghz else "auto"
         if "onboarding_completed" in patch:
             self.cfg.onboarding_completed = bool(patch["onboarding_completed"])
         if "keep_awake_during_stream" in patch:

@@ -21,7 +21,7 @@ from wiredeck.version import APP_ID, APP_NAME, APP_VERSION, SCHEMA_VERSION
 
 def test_version_constants_are_single_source():
     assert APP_NAME == "WireDeck"
-    assert APP_VERSION == "0.2.0"
+    assert APP_VERSION == "0.2.1"
     assert APP_ID == "{8E4F7A21-6C3D-4B9E-9A12-5D8C1F4E2B70}"
     assert SCHEMA_VERSION == "1.0"
 

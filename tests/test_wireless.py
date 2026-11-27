@@ -322,3 +322,65 @@ def test_wireless_config_isolation_privacy_and_bundled_toolkits(tmp_path: Path):
     tk = run_toolkit("common/probe-wifi-advanced", cfg=reloaded)
     assert tk.ok is True
     assert tk.data["tool"] == "common/probe-wifi-advanced"
+
+
+def test_24ghz_hotspot_band_modes_and_5g_fallback(tmp_path: Path):
+    paths = resolve_app_paths(tmp_path / "app", local_appdata=tmp_path / "la")
+
+    # 1. Config persistence for 3 hotspot_band modes & legacy hotspot_prefer_5ghz sync
+    cfg = AppConfig(active_transport="wireless", wireless_submode="hotspot", hotspot_band="2.4ghz")
+    assert cfg.hotspot_band == "2.4ghz" and cfg.hotspot_prefer_5ghz is False
+    save_config(paths, cfg)
+    reloaded = load_config(paths)
+    assert reloaded.hotspot_band == "2.4ghz" and reloaded.hotspot_prefer_5ghz is False
+
+    # 2. When hotspot_band="2.4ghz", W3 running at 2.4 GHz does NOT emit HOTSPOT_BAND_24GHZ warning
+    snap_24_hs = _base_wireless_snap(
+        hotspot={
+            "supported": True,
+            "band_5ghz_supported": True,
+            "band_24ghz_supported": True,
+            "capability": "Enabled",
+            "state": "On",
+            "band": "TwoPointFourGigahertz",
+            "ssid": "WireDeck-24G",
+            "client_count": 1,
+        }
+    )
+    rep_24_intentional = classify_wireless_snapshot(snap_24_hs, reloaded)
+    w3_int = next(l for l in rep_24_intentional.layers if l.layer == "W3")
+    assert w3_int.status == Severity.OK
+    assert not any(f.code == "HOTSPOT_BAND_24GHZ" for f in w3_int.faults)
+
+    # 3. When hotspot_band="5ghz" and 5GHz supported, 2.4 GHz emits warning
+    cfg_5g = AppConfig(active_transport="wireless", wireless_submode="hotspot", hotspot_band="5ghz")
+    rep_5g_warn = classify_wireless_snapshot(snap_24_hs, cfg_5g)
+    w3_warn = next(l for l in rep_5g_warn.layers if l.layer == "W3")
+    assert any(f.code == "HOTSPOT_BAND_24GHZ" for f in w3_warn.faults)
+
+    # 4. enable_hotspot handles forced 2.4 GHz, automatic 5G->2.4G fallback, and NO_CONNECTION_PROFILE
+    scripts: list[str] = []
+    r24 = enable_hotspot(
+        paths,
+        reloaded,
+        runner=lambda sc, t: scripts.append(sc) or _ok_ps('{"state":"On","band":"TwoPointFourGigahertz","fallback_from_5g":false}'),
+        snapshot_fn=lambda *a, **kw: _base_wireless_snap(),
+    )
+    assert r24.ok is True and "2.4 GHz" in r24.message
+    assert "TwoPointFourGigahertz" in scripts[-1]
+
+    r_fb = enable_hotspot(
+        paths,
+        cfg_5g,
+        runner=lambda sc, t: _ok_ps('{"state":"On","band":"TwoPointFourGigahertz","fallback_from_5g":true}'),
+        snapshot_fn=lambda *a, **kw: _base_wireless_snap(),
+    )
+    assert r_fb.ok is True and r_fb.details["fallback_from_5g"] is True and "降级" in r_fb.message
+
+    r_no_up = enable_hotspot(
+        paths,
+        cfg_5g,
+        runner=lambda sc, t: PsResult(returncode=1, stdout="", stderr="NO_CONNECTION_PROFILE", timed_out=False),
+        snapshot_fn=lambda *a, **kw: _base_wireless_snap(),
+    )
+    assert r_no_up.ok is False and r_no_up.code == "NO_UPSTREAM_NETWORK"

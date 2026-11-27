@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 APP_NAME = "WireDeck"
-APP_VERSION = "0.2.0"
-APP_VERSION_TUPLE = (0, 2, 0, 0)
+APP_VERSION = "0.2.1"
+APP_VERSION_TUPLE = (0, 2, 1, 0)
 APP_ID = "{8E4F7A21-6C3D-4B9E-9A12-5D8C1F4E2B70}"
 PUBLISHER = "WireDeck Contributors"
 REPO_URL = "https://github.com/Iraryi/WireDeck"

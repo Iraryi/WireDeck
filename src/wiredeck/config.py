@@ -19,6 +19,7 @@ VALID_LANGUAGES = ("zh-CN", "zh-TW", "en", "ja")
 VALID_THEMES = ("light", "dark")
 VALID_TRANSPORTS = ("wired", "wireless")
 VALID_WIRELESS_SUBMODES = ("hotspot", "lan")
+VALID_HOTSPOT_BANDS = ("5ghz", "2.4ghz", "auto")
 VALID_RECORDER_BACKENDS = ("auto", "obs", "nvidia", "gamebar", "ffmpeg", "custom")
 VALID_RECORDER_MODES = ("manual", "replay", "auto_record")
 VALID_FFMPEG_FORMATS = ("mkv", "mp4", "mov", "ts", "flv")
@@ -190,6 +191,7 @@ class AppConfig:
         uplink_interface: str = "",
         wifi_interface: str = "",
         hotspot_prefer_5ghz: bool = True,
+        hotspot_band: str | None = None,
         http_bridge_enabled: bool = False,
         onboarding_completed: bool = False,
         plugin_registry_url: str = "",
@@ -215,7 +217,13 @@ class AppConfig:
         self.ethernet_interface = ethernet_interface
         self.uplink_interface = uplink_interface
         self.wifi_interface = wifi_interface
-        self.hotspot_prefer_5ghz = bool(hotspot_prefer_5ghz)
+        raw_band = str(hotspot_band).strip().lower() if isinstance(hotspot_band, str) else ""
+        if raw_band in VALID_HOTSPOT_BANDS:
+            self.hotspot_band = raw_band
+            self.hotspot_prefer_5ghz = raw_band == "5ghz"
+        else:
+            self.hotspot_prefer_5ghz = bool(hotspot_prefer_5ghz)
+            self.hotspot_band = "5ghz" if self.hotspot_prefer_5ghz else "auto"
         self.http_bridge_enabled = bool(http_bridge_enabled)
         self.onboarding_completed = bool(onboarding_completed)
         self.plugin_registry_url = plugin_registry_url.strip() if isinstance(plugin_registry_url, str) else ""
@@ -349,6 +357,7 @@ class AppConfig:
             "uplink_interface": self.uplink_interface,
             "wifi_interface": self.wifi_interface,
             "hotspot_prefer_5ghz": self.hotspot_prefer_5ghz,
+            "hotspot_band": self.hotspot_band,
             "http_bridge_enabled": self.http_bridge_enabled,
             "onboarding_completed": self.onboarding_completed,
             "plugin_registry_url": self.plugin_registry_url,
@@ -487,6 +496,7 @@ def _normalize_config(raw: dict[str, Any]) -> AppConfig:
         uplink_interface=str(uplink) if isinstance(uplink, str) else "",
         wifi_interface=str(wifi) if isinstance(wifi, str) else "",
         hotspot_prefer_5ghz=bool(raw.get("hotspot_prefer_5ghz", True)),
+        hotspot_band=raw.get("hotspot_band") if raw.get("hotspot_band") in VALID_HOTSPOT_BANDS else None,
         http_bridge_enabled=bool(raw.get("http_bridge_enabled", False)),
         onboarding_completed=bool(raw.get("onboarding_completed", False)),
         plugin_registry_url=str(raw.get("plugin_registry_url", "") or "").strip() if isinstance(raw.get("plugin_registry_url", ""), str) else "",
@@ -532,6 +542,7 @@ def save_config(paths: AppPaths, cfg: AppConfig) -> None:
         "uplink_interface": cfg.uplink_interface,
         "wifi_interface": cfg.wifi_interface,
         "hotspot_prefer_5ghz": cfg.hotspot_prefer_5ghz,
+        "hotspot_band": cfg.hotspot_band,
         "http_bridge_enabled": cfg.http_bridge_enabled,
         "onboarding_completed": cfg.onboarding_completed,
         "plugin_registry_url": cfg.plugin_registry_url,

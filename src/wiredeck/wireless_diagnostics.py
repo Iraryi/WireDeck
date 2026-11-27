@@ -206,7 +206,7 @@ def classify_wireless_snapshot(
                     layer="W2",
                     severity=Severity.WARN,
                     title="当前处于 2.4 GHz 频段",
-                    message="2.4 GHz 易受蓝牙/同频干扰导致画面卡顿，建议切换 5 GHz 或开启 5GHz 热点",
+                    message="2.4 GHz 同样可正常串流并开启防抖；若偶发卡顿建议将串流码率控制在 10–15 Mbps，并将蓝牙手柄改有线以避开同频干扰",
                 )
             )
         if (signal_pct is not None and int(signal_pct) < 60) or (rssi_dbm is not None and int(rssi_dbm) < -70):
@@ -294,19 +294,19 @@ def classify_wireless_snapshot(
             )
         elif hs_on:
             w3_base = Severity.OK
-            w3_summary = f"{hs_band} · {hs_clients_count} 台已连"
-            if "two" in hs_band.lower() or "2.4" in hs_band:
-                if hs_5g_ok:
-                    w3_faults.append(
-                        FaultItem(
-                            code="HOTSPOT_BAND_24GHZ",
-                            layer="W3",
-                            severity=Severity.WARN,
-                            title="热点正运行在 2.4 GHz",
-                            message="本机支持 5 GHz 热点，建议重建为 5 GHz 以获得高带宽低延迟",
-                            fix_action="enable-hotspot",
-                        )
+            band_disp = "5 GHz" if "five" in hs_band.lower() else ("2.4 GHz" if ("two" in hs_band.lower() or "2.4" in hs_band) else (hs_band or "Auto"))
+            w3_summary = f"{band_disp} · {hs_clients_count} 台已连"
+            if ("two" in hs_band.lower() or "2.4" in hs_band) and hs_5g_ok and getattr(cfg, "hotspot_band", "5ghz") == "5ghz":
+                w3_faults.append(
+                    FaultItem(
+                        code="HOTSPOT_BAND_24GHZ",
+                        layer="W3",
+                        severity=Severity.WARN,
+                        title="热点正运行在 2.4 GHz",
+                        message="本机支持 5 GHz 热点，如需更高带宽可点「一键修复」重建（或切换频段为 2.4 GHz 以消除提醒）",
+                        fix_action="enable-hotspot",
                     )
+                )
         else:
             w3_base = Severity.IDLE
             w3_summary = "热点未开启"
@@ -328,7 +328,7 @@ def classify_wireless_snapshot(
                     layer="W3",
                     severity=Severity.WARN,
                     title="疑似路由器/校园网 AP 隔离",
-                    message="网关正常但同网段设备不可达，若在校园网建议改用上方「5GHz 电脑热点」",
+                    message="网关正常但同网段设备不可达，若在校园网建议改用上方「电脑热点直连」",
                     details={"wifi_ip": wifi_ip, "peer_ip": target_peer},
                 )
             )

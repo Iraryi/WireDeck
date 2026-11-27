@@ -123,7 +123,7 @@
               </div>
             </div>
             <div class="ctrl-actions">
-              <button class="btn btn-primary" id="btnWPrimary" type="button" data-i18n="w_btn_start_hotspot">开启 5GHz 热点</button>
+              <button class="btn btn-primary" id="btnWPrimary" type="button" data-i18n="w_btn_start_hotspot">开启热点直连</button>
               <button class="btn" id="btnWSecondary" type="button" data-i18n="w_btn_optimize">开启无线防抖</button>
               <button class="btn btn-icon" id="btnWRefresh" type="button" title="刷新">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><polyline points="21 3 21 9 15 9"/></svg>
@@ -134,13 +134,18 @@
           <!-- Submode switcher + compact contextual strip -->
           <div class="wireless-bar">
             <div class="seg-group">
-              <button class="seg-btn active" id="btnSubHotspot" type="button" data-i18n="w_sub_hotspot">5GHz 电脑热点</button>
+              <button class="seg-btn active" id="btnSubHotspot" type="button" data-i18n="w_sub_hotspot">电脑热点直连</button>
               <button class="seg-btn" id="btnSubLan" type="button" data-i18n="w_sub_lan">同 Wi-Fi 局域网</button>
             </div>
 
             <div class="w-strip" id="wHotspotStrip">
               <span class="w-kv"><span class="w-k" data-i18n="w_ssid">热点</span> <span class="mono w-v" id="wHotspotSsid">—</span></span>
               <span class="w-kv"><span class="w-k" data-i18n="w_pass">密码</span> <span class="mono w-v" id="wHotspotPass">••••••••</span></span>
+              <select id="wHotspotBandSel" class="w-band-sel" title="Hotspot Band">
+                <option value="5ghz" data-i18n="w_band_5g">5G 优先</option>
+                <option value="2.4ghz" data-i18n="w_band_24g">2.4G</option>
+                <option value="auto" data-i18n="w_band_auto">自动</option>
+              </select>
               <button class="btn btn-sm" id="btnWShowPass" type="button" data-i18n="w_show">显示</button>
               <button class="btn btn-sm" id="btnWCopyPass" type="button" data-i18n="w_copy_pass">复制密码</button>
               <span class="ext-tag" id="wClientPill" data-i18n="w_no_client">等待设备接入热点</span>
@@ -603,10 +608,11 @@
             <div class="setting-row compact">
               <span class="setting-label" data-i18n="set_wifi">无线网卡</span>
               <div class="row-actions" style="gap:10px;">
-                <label class="inline-check">
-                  <input type="checkbox" id="setHotspot5G" checked />
-                  <span data-i18n="set_hotspot_5g">热点优先 5 GHz</span>
-                </label>
+                <select id="setHotspotBand" style="min-width:210px;width:210px;">
+                  <option value="5ghz" data-i18n="set_hs_band_5g">热点优先 5G (自动降级 2.4G)</option>
+                  <option value="2.4ghz" data-i18n="set_hs_band_24g">热点锁定 2.4 GHz</option>
+                  <option value="auto" data-i18n="set_hs_band_auto">热点频段自动</option>
+                </select>
                 <select id="setWifi">
                   <option value="" data-i18n="set_eth_auto">自动识别（推荐）</option>
                 </select>

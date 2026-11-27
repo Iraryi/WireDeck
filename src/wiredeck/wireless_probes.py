@@ -74,6 +74,7 @@ $result = [ordered]@{
   hotspot = [ordered]@{
     supported = $false
     band_5ghz_supported = $false
+    band_24ghz_supported = $false
     capability = "Unknown"
     state = "Off"
     band = "Auto"
@@ -197,9 +198,12 @@ try {
     $tm = [Windows.Networking.NetworkOperators.NetworkOperatorTetheringManager]::CreateFromConnectionProfile($prof)
     $ap = $tm.GetCurrentAccessPointConfiguration()
     $supports5g = $false
+    $supports24g = $false
     try { $supports5g = [bool]$ap.IsBandSupported([Windows.Networking.NetworkOperators.TetheringWiFiBand]::FiveGigahertz) } catch {}
+    try { $supports24g = [bool]$ap.IsBandSupported([Windows.Networking.NetworkOperators.TetheringWiFiBand]::TwoPointFourGigahertz) } catch {}
     $result.hotspot.supported = ([string]$cap -eq 'Enabled') -or ([string]$tm.TetheringOperationalState -eq 'On')
     $result.hotspot.band_5ghz_supported = $supports5g
+    $result.hotspot.band_24ghz_supported = $supports24g
     $result.hotspot.state = [string]$tm.TetheringOperationalState
     $result.hotspot.band = [string]$ap.Band
     # Security: NEVER include $ap.Passphrase in snapshot!

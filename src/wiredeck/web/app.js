@@ -231,12 +231,12 @@
       WIFI_DISABLED: ["無線網卡已停用", "請在系統設定啟用無線介面卡或開啟 Wi-Fi 開關"],
       WIFI_POWERSAVE_ENABLED: ["無線節能/封包合併開啟中", "偵測到 MIMO 節能或封包合併，建議開啟「無線防抖」關閉"],
       WIFI_DISCONNECTED: ["Wi-Fi 尚未連線", "同 Wi-Fi 模式需要電腦與裝置連入同一無線路由器"],
-      WIFI_BAND_24GHZ: ["目前連在 2.4 GHz 頻段", "2.4 GHz 易受干擾導致畫面卡頓，建議切換 5 GHz 或開 5GHz 熱點"],
-      WIFI_SIGNAL_WEAK: ["無線訊號強度偏弱", "建議靠近路由器或開啟 5 GHz 電腦熱點直連"],
-      WIFI_LINK_SLOW: ["無線協商速率偏低", "高碼率串流建議使用 5 GHz / Wi-Fi 6 頻段"],
+      WIFI_BAND_24GHZ: ["目前連在 2.4 GHz 頻段", "2.4 GHz 亦可正常串流；建議碼率 10–15 Mbps 並優先有線手把避開藍牙干擾"],
+      WIFI_SIGNAL_WEAK: ["無線訊號強度偏弱", "建議靠近路由器或開啟電腦熱點直連"],
+      WIFI_LINK_SLOW: ["無線協商速率偏低", "高碼率串流建議使用 5 GHz，或於 2.4 GHz 適當降低碼率"],
       WIRED_NAT_CONFLICT: ["有線 WinNAT 運作中", "有線分享與行動熱點互斥，請先關閉有線直連"],
       HOTSPOT_UNSUPPORTED: ["目前無法開啟行動熱點", "請確認電腦已連網且系統原則允許開啟熱點"],
-      HOTSPOT_BAND_24GHZ: ["熱點正運作於 2.4 GHz", "本機支援 5 GHz 熱點，點右側一鍵切換至 5 GHz"],
+      HOTSPOT_BAND_24GHZ: ["熱點正運作於 2.4 GHz", "本機支援 5 GHz 熱點，點右側切換或將熱點頻段設為 2.4G"],
       LAN_AP_ISOLATION_SUSPECTED: ["疑似路由器/校園網 AP 隔離", "閘道正常但同網段裝置無法直通，建議改用上方「5GHz 電腦熱點」"],
       WIFI_BG_SCAN_ACTIVE: ["系統週期背景掃描開啟中", "Windows 定期掃描 Wi-Fi 易引發頓挫，點一鍵開啟防抖"],
       WIFI_JITTER_HIGH: ["無線鏈路抖動偏高", "建議改用 5 GHz 熱點直連或更換較乾淨的頻道"],
@@ -272,12 +272,12 @@
       WIFI_DISABLED: ["Wi-Fi Adapter Disabled", "Enable Wi-Fi adapter in Windows settings or toggle Wi-Fi ON"],
       WIFI_POWERSAVE_ENABLED: ["Wi-Fi Power-Save On", "MIMO SMPS / Packet Coalescing can stutter; click Fix Now to tune"],
       WIFI_DISCONNECTED: ["Wi-Fi Not Connected", "Connect both PC and device to the same Wi-Fi network"],
-      WIFI_BAND_24GHZ: ["Connected on 2.4 GHz", "2.4 GHz suffers heavy interference; switch to 5 GHz or PC Hotspot"],
-      WIFI_SIGNAL_WEAK: ["Weak Wi-Fi Signal", "Move closer to router or start PC 5 GHz Hotspot for direct link"],
-      WIFI_LINK_SLOW: ["Low Wi-Fi PHY Rate", "Use 5 GHz / Wi-Fi 6 for smooth high-bitrate game streaming"],
+      WIFI_BAND_24GHZ: ["Connected on 2.4 GHz", "2.4 GHz streaming works too: keep bitrate ~10-15 Mbps and wire Bluetooth pads"],
+      WIFI_SIGNAL_WEAK: ["Weak Wi-Fi Signal", "Move closer to router or start PC Hotspot direct link"],
+      WIFI_LINK_SLOW: ["Low Wi-Fi PHY Rate", "Use 5 GHz for high bitrate, or lower bitrate on 2.4 GHz"],
       WIRED_NAT_CONFLICT: ["Wired WinNAT Active", "Wired WireDeckNat conflicts with Mobile Hotspot; stop Wired first"],
       HOTSPOT_UNSUPPORTED: ["Mobile Hotspot Unavailable", "Ensure internet connection exists and hotspot policy allows sharing"],
-      HOTSPOT_BAND_24GHZ: ["Hotspot Running 2.4 GHz", "5 GHz hotspot is supported; click Fix Now to lock 5 GHz band"],
+      HOTSPOT_BAND_24GHZ: ["Hotspot Running 2.4 GHz", "5 GHz supported; click Fix Now or switch band selector to 2.4G"],
       LAN_AP_ISOLATION_SUSPECTED: ["AP Isolation Suspected", "Gateway responds but peer is blocked; use 5 GHz PC Hotspot instead"],
       WIFI_BG_SCAN_ACTIVE: ["Background Wi-Fi Scan On", "Periodic Windows scans cause lag spikes; click Anti-Stutter to pause"],
       WIFI_JITTER_HIGH: ["High Wi-Fi Jitter", "High RTT variance or packet loss; switch to 5 GHz Hotspot or cleaner channel"],
@@ -313,12 +313,12 @@
       WIFI_DISABLED: ["無線 LAN が無効です", "Windows 設定から Wi-Fi をオンにしてください"],
       WIFI_POWERSAVE_ENABLED: ["無線省電力 / 結合が有効", "MIMO 省電力やパケット結合が遅延の原因になります。「無線安定化」で解除できます"],
       WIFI_DISCONNECTED: ["Wi-Fi 未接続", "PC と端末を同じ Wi-Fi に接続してください"],
-      WIFI_BAND_24GHZ: ["2.4 GHz 帯で接続中", "2.4 GHz は干渉が多いため 5 GHz または 5G ホットスポットを推奨します"],
-      WIFI_SIGNAL_WEAK: ["Wi-Fi 電波が弱い", "ルーターに近づくか、PC の 5 GHz ホットスポットをご利用ください"],
-      WIFI_LINK_SLOW: ["リンク速度が低下中", "高画質ストリーミングには 5 GHz / Wi-Fi 6 接続を推奨します"],
+      WIFI_BAND_24GHZ: ["2.4 GHz 帯で接続中", "2.4 GHz でも配信可能です。ビットレート 10〜15 Mbps 目安＋有線コントローラ推奨"],
+      WIFI_SIGNAL_WEAK: ["Wi-Fi 電波が弱い", "ルーターに近づくか、PC ホットスポット直結をご利用ください"],
+      WIFI_LINK_SLOW: ["リンク速度が低下中", "高画質は 5 GHz 推奨、2.4 GHz の場合はビットレートを控えめにしてください"],
       WIRED_NAT_CONFLICT: ["有線 WinNAT が稼働中", "ホットスポットと競合するため、先に有線直結を停止してください"],
       HOTSPOT_UNSUPPORTED: ["モバイルホットスポット不可", "PC のネット接続と共有ポリシーを確認してください"],
-      HOTSPOT_BAND_24GHZ: ["2.4 GHz ホットスポット稼働中", "5 GHz 帯に対応しています。ワンクリック修復で 5 GHz に切り替えます"],
+      HOTSPOT_BAND_24GHZ: ["2.4 GHz ホットスポット稼働中", "5 GHz に対応しています。修復で 5 GHz 化、または帯域設定を 2.4G へ変更"],
       LAN_AP_ISOLATION_SUSPECTED: ["AP 分離（プライバシー保護）疑い", "ルーター側で端末間通信が遮断されています。5 GHz PC ホットスポットを推奨します"],
       WIFI_BG_SCAN_ACTIVE: ["バックグラウンドスキャン有効", "Windows の定期 Wi-Fi スキャンがラグの原因になります。無線安定化で一時停止できます"],
       WIFI_JITTER_HIGH: ["無線のジッターが高い", "遅延ばらつきが大きいため、5 GHz ホットスポットまたは空いたチャンネルをご使用ください"],
@@ -651,8 +651,13 @@
       if (m2.band) metaParts.push(m2.band + (m2.channel ? ` Ch${m2.channel}` : ""));
       if (m2.rssi_dbm !== null && m2.rssi_dbm !== undefined) metaParts.push(`${m2.rssi_dbm} dBm`);
     }
-    if (hsOn) metaParts.push(t("w_detail_hotspot_on"));
-    else if (antiOn) metaParts.push(t("w_detail_opt_on"));
+    if (hsOn) {
+      const hb = String((w3.metrics && w3.metrics.hotspot_band) || "");
+      const hbLbl = /five/i.test(hb) ? "5 GHz" : ((/two|2\.4/i.test(hb)) ? "2.4 GHz" : hb);
+      metaParts.push(hbLbl ? `${t("w_detail_hotspot_on")} (${hbLbl})` : t("w_detail_hotspot_on"));
+    } else if (antiOn) {
+      metaParts.push(t("w_detail_opt_on"));
+    }
     document.getElementById("wCtrlMeta").textContent = metaParts.join(" · ") || "—";
 
     // Submode toggle state
@@ -1905,7 +1910,11 @@
     document.getElementById("setPeerIp").value = cfg.peer_ip || "192.168.50.1";
     document.getElementById("setDns").value = (cfg.dns_servers || ["223.5.5.5", "8.8.8.8"]).join(", ");
     document.getElementById("setWirelessPeerIp").value = cfg.wireless_peer_ip || "";
-    document.getElementById("setHotspot5G").checked = cfg.hotspot_prefer_5ghz !== false;
+    const hbVal = cfg.hotspot_band || (cfg.hotspot_prefer_5ghz === false ? "auto" : "5ghz");
+    const setHbEl = document.getElementById("setHotspotBand");
+    if (setHbEl) setHbEl.value = hbVal;
+    const wHbEl = document.getElementById("wHotspotBandSel");
+    if (wHbEl) wHbEl.value = hbVal;
     const kaEl = document.getElementById("setKeepAwake");
     if (kaEl) kaEl.checked = cfg.keep_awake_during_stream !== false;
     const arEl = document.getElementById("setAutoRestoreExit");
@@ -3386,6 +3395,24 @@
         if (state.toolkits.length) renderToolkits(state.toolkits);
       }
     });
+    const saveBandFn = async (nextBand) => {
+      const api = getApi();
+      if (!api || !api.save_settings) return;
+      const setHbEl = document.getElementById("setHotspotBand");
+      const wHbEl = document.getElementById("wHotspotBandSel");
+      if (setHbEl) setHbEl.value = nextBand;
+      if (wHbEl) wHbEl.value = nextBand;
+      await api.save_settings({ hotspot_band: nextBand });
+      const w3 = (state.wirelessReport && layerMapOf(state.wirelessReport).W3) || null;
+      const hsOnNow = Boolean(w3 && w3.metrics && w3.metrics.hotspot_state === "On");
+      showToast(t(hsOnNow ? "w_toast_band_saved_restart" : "toast_saved"));
+      state.wirelessStale = true;
+      await refreshAll(true);
+    };
+    const wHbSel = document.getElementById("wHotspotBandSel");
+    if (wHbSel) wHbSel.addEventListener("change", (e) => saveBandFn(e.target.value));
+    const setHbSel = document.getElementById("setHotspotBand");
+    if (setHbSel) setHbSel.addEventListener("change", (e) => saveBandFn(e.target.value));
     document.getElementById("setProfile").addEventListener("change", async (e) => {
       const api = getApi();
       if (!api || !api.switch_preset) return;
@@ -3417,7 +3444,7 @@
         active_preset: document.getElementById("setProfile").value,
         ethernet_interface: document.getElementById("setEth").value,
         wifi_interface: document.getElementById("setWifi").value,
-        hotspot_prefer_5ghz: Boolean(document.getElementById("setHotspot5G").checked),
+        hotspot_band: (document.getElementById("setHotspotBand") || {}).value || "5ghz",
         keep_awake_during_stream: Boolean(document.getElementById("setKeepAwake") ? document.getElementById("setKeepAwake").checked : true),
         auto_restore_on_exit: Boolean(document.getElementById("setAutoRestoreExit") ? document.getElementById("setAutoRestoreExit").checked : false),
         host_ip: document.getElementById("setHostIp").value.trim(),

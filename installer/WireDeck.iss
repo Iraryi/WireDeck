@@ -163,23 +163,21 @@ end;
 
 function InitializeUninstall(): Boolean;
 var
-  CliExe: string;
+  CliExe, GuiExe: string;
   ResultCode: Integer;
   LogDir, LogFile: string;
 begin
   Result := True;
   CliExe := ExpandConstant('{app}\wiredeck-cli.exe');
-  if not FileExists(CliExe) then
-    Exit;
+  GuiExe := ExpandConstant('{app}\WireDeck.exe');
 
-  { Check if WireDeckNat is currently active (exit code 0 means active) }
-  if Exec(CliExe, 'status --check-nat-active', '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
+  { Silent uninstall must NEVER show interactive prompts or remove user data / companion apps }
+  if UninstallSilent then
   begin
-    if ResultCode = 0 then
+    if FileExists(CliExe) then
     begin
-      if UninstallSilent then
+      if Exec(CliExe, 'status --check-nat-active', '', SW_HIDE, ewWaitUntilTerminated, ResultCode) and (ResultCode = 0) then
       begin
-        { Silent uninstall cannot safely force interactive UAC; record explicit warning log }
         if FileExists(ExpandConstant('{app}\portable.mode')) then
           LogDir := ExpandConstant('{app}\data\logs')
         else
@@ -189,33 +187,8 @@ begin
         SaveStringToFile(LogFile,
           'WARNING: WireDeckNat was still active during silent uninstall. Run "Get-NetNat WireDeckNat | Remove-NetNat" as Administrator.' + #13#10,
           True);
-      end
-      else
-      begin
-        if MsgBox(CustomMessage('ActiveNatPrompt'), mbConfirmation, MB_YESNO) = IDYES then
-        begin
-          if (not Exec(CliExe, 'apply disable-direct --elevate', '', SW_HIDE, ewWaitUntilTerminated, ResultCode)) or (ResultCode <> 0) then
-          begin
-            MsgBox(CustomMessage('ActiveNatAbort'), mbError, MB_OK);
-            Result := False;
-            Exit;
-          end;
-        end
-        else
-        begin
-          Result := False;
-          Exit;
-        end;
       end;
-    end;
-  end;
-
-  { Check if wireless anti-stutter backup is active (exit code 0 means active) }
-  if Exec(CliExe, 'status --check-wifi-tuned', '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
-  begin
-    if ResultCode = 0 then
-    begin
-      if UninstallSilent then
+      if Exec(CliExe, 'status --check-wifi-tuned', '', SW_HIDE, ewWaitUntilTerminated, ResultCode) and (ResultCode = 0) then
       begin
         if FileExists(ExpandConstant('{app}\portable.mode')) then
           LogDir := ExpandConstant('{app}\data\logs')
@@ -226,23 +199,69 @@ begin
         SaveStringToFile(LogFile,
           'WARNING: WireDeck Wi-Fi anti-stutter tuning was still active during silent uninstall. Run "netsh wlan set autoconfig enabled=yes interface=WLAN" as Administrator.' + #13#10,
           True);
-      end
-      else
+      end;
+    end;
+    Exit;
+  end;
+
+  { Interactive uninstall: launch modern WireDeck interactive Uninstall Wizard (companion cleanup defaults OFF) }
+  if FileExists(GuiExe) then
+  begin
+    if Exec(GuiExe, '--uninstall-wizard --from-uninstaller', ExpandConstant('{app}'), SW_SHOW, ewWaitUntilTerminated, ResultCode) then
+    begin
+      if ResultCode = 0 then
       begin
-        if MsgBox(CustomMessage('ActiveWifiPrompt'), mbConfirmation, MB_YESNO) = IDYES then
+        Sleep(300);
+        Result := True;
+        Exit;
+      end;
+      Result := False;
+      Exit;
+    end;
+  end;
+
+  { Fallback if WireDeck.exe is missing/corrupt }
+  if not FileExists(CliExe) then
+    Exit;
+
+  if Exec(CliExe, 'status --check-nat-active', '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
+  begin
+    if ResultCode = 0 then
+    begin
+      if MsgBox(CustomMessage('ActiveNatPrompt'), mbConfirmation, MB_YESNO) = IDYES then
+      begin
+        if (not Exec(CliExe, 'apply disable-direct --elevate', '', SW_HIDE, ewWaitUntilTerminated, ResultCode)) or (ResultCode <> 0) then
         begin
-          if (not Exec(CliExe, 'apply restore-wifi --elevate', '', SW_HIDE, ewWaitUntilTerminated, ResultCode)) or (ResultCode <> 0) then
-          begin
-            MsgBox(CustomMessage('ActiveWifiAbort'), mbError, MB_OK);
-            Result := False;
-            Exit;
-          end;
-        end
-        else
-        begin
+          MsgBox(CustomMessage('ActiveNatAbort'), mbError, MB_OK);
           Result := False;
           Exit;
         end;
+      end
+      else
+      begin
+        Result := False;
+        Exit;
+      end;
+    end;
+  end;
+
+  if Exec(CliExe, 'status --check-wifi-tuned', '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
+  begin
+    if ResultCode = 0 then
+    begin
+      if MsgBox(CustomMessage('ActiveWifiPrompt'), mbConfirmation, MB_YESNO) = IDYES then
+      begin
+        if (not Exec(CliExe, 'apply restore-wifi --elevate', '', SW_HIDE, ewWaitUntilTerminated, ResultCode)) or (ResultCode <> 0) then
+        begin
+          MsgBox(CustomMessage('ActiveWifiAbort'), mbError, MB_OK);
+          Result := False;
+          Exit;
+        end;
+      end
+      else
+      begin
+        Result := False;
+        Exit;
       end;
     end;
   end;

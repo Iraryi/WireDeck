@@ -77,6 +77,17 @@ from wiredeck.stream_client import (
 )
 from wiredeck.system_env import collect_system_env, collect_system_env_cached, evaluate_system_health
 from wiredeck.toolkits import discover_toolkits, run_toolkit
+from wiredeck.uninstaller import (
+    discover_uninstall_items,
+    execute_uninstall_cleanup,
+    launch_self_uninstall,
+)
+from wiredeck.updater import (
+    apply_staged_app_update,
+    check_all_updates,
+    download_and_stage_app_update,
+    update_all_plugins as updater_update_all_plugins,
+)
 from wiredeck.version import APP_NAME, APP_VERSION, NAT_NAME
 from wiredeck.win32_helpers import Win32Ops, default_win32_ops
 from wiredeck.wireless_diagnostics import classify_wireless_snapshot, run_wireless_diagnosis
@@ -318,6 +329,8 @@ class WireDeckApi:
         win32_ops: Win32Ops | None = None,
         preview_state: str | None = None,
         preview_wizard_step: int | None = None,
+        uninstall_wizard: bool = False,
+        from_uninstaller: bool = False,
     ) -> None:
         self.paths = paths or resolve_app_paths()
         self.cfg = load_config(self.paths)
@@ -326,11 +339,16 @@ class WireDeckApi:
         self._win32_ops = win32_ops or default_win32_ops()
         self._preview_state = preview_state
         self._preview_wizard_step = preview_wizard_step
+        self._uninstall_wizard = bool(uninstall_wizard)
+        self._from_uninstaller = bool(from_uninstaller)
+        self._uninstall_exit_code = 2 if uninstall_wizard else 0
         self._last_report: DiagnosticReport | None = None
         self._last_wireless_report: DiagnosticReport | None = None
         self._bridge: LocalBridgeServer | None = None
         self._window: Any = None
         self._recorder = RecorderController()
+        self._last_update_check: dict[str, Any] | None = None
+        self._last_uninstall_scan: dict[str, Any] | None = None
         if preview_state in ("wireless", "wireless_wizard"):
             self.cfg.active_transport = "wireless"
             self.cfg.wireless_submode = "hotspot"
@@ -347,6 +365,8 @@ class WireDeckApi:
             return "wireless"
         if self._preview_state == "wireless_wizard":
             return "wizard"
+        if self._preview_state == "update":
+            return "settings"
         return None
 
     def get_state(self) -> dict[str, Any]:
@@ -361,20 +381,25 @@ class WireDeckApi:
         show_onboarding = (
             True
             if self._preview_state == "onboarding"
-            else (False if self._preview_state else (not self.cfg.onboarding_completed))
+            else (False if (self._preview_state or self._uninstall_wizard) else (not self.cfg.onboarding_completed))
         )
         return {
             "app_name": APP_NAME,
             "app_version": APP_VERSION,
             "is_admin": is_admin(),
+            "is_portable": self.paths.is_portable,
             "config": self.cfg.to_dict(),
             "active_preset": active_preset.to_dict(),
             "presets_meta": [p.to_dict() for p in list_presets()],
             "show_onboarding": show_onboarding,
             "paths": self.paths.to_dict(),
             "bridge": bridge_info,
+            "preview_state": self._preview_state,
             "preview_view": self._preview_view_name(),
             "preview_wizard_step": self._preview_wizard_step,
+            "uninstall_wizard_mode": self._uninstall_wizard or (self._preview_state == "uninstall"),
+            "from_uninstaller": self._from_uninstaller,
+            "can_self_uninstall": bool((self.paths.exe_dir / "unins000.exe").is_file() or self.paths.is_portable),
         }
 
     def diagnose(self) -> dict[str, Any]:
@@ -618,6 +643,14 @@ class WireDeckApi:
             self.cfg.keep_awake_during_stream = bool(patch["keep_awake_during_stream"])
         if "auto_restore_on_exit" in patch:
             self.cfg.auto_restore_on_exit = bool(patch["auto_restore_on_exit"])
+        if "update_channel" in patch:
+            uc = str(patch["update_channel"] or "stable").strip().lower()
+            if uc in ("stable", "beta"):
+                self.cfg.update_channel = uc
+        if "update_feed_url" in patch:
+            self.cfg.update_feed_url = str(patch["update_feed_url"] or "").strip()
+        if "auto_check_updates" in patch:
+            self.cfg.auto_check_updates = bool(patch["auto_check_updates"])
         if "custom_client_path" in patch:
             self.cfg.custom_client_path = str(patch["custom_client_path"] or "").strip()
 
@@ -1675,6 +1708,266 @@ class WireDeckApi:
         except Exception:
             return {"ok": False}
 
+    def check_updates(self, force_channel: str = "", force_url: str = "") -> dict[str, Any]:
+        if self._preview_state == "update":
+            return {
+                "ok": True,
+                "checked_at": "2026-11-28T01:00:00Z",
+                "total_updates": 2,
+                "has_any_update": True,
+                "app": {
+                    "ok": True,
+                    "has_update": True,
+                    "current_version": APP_VERSION,
+                    "latest_version": "0.3.0",
+                    "channel": force_channel or self.cfg.update_channel,
+                    "feed_url": self.cfg.update_feed_url or "https://api.github.com/repos/Iraryi/WireDeck/releases/latest",
+                    "is_portable": self.paths.is_portable,
+                    "asset_name": "WireDeck-v0.3.0-win64-setup.exe",
+                    "download_url": "https://github.com/Iraryi/WireDeck/releases/download/v0.3.0/WireDeck-v0.3.0-win64-setup.exe",
+                    "sha256": "a" * 64,
+                    "sha256_ready": True,
+                    "size_bytes": 17_820_416,
+                    "release_notes": "1. 优化 2.4G/5G 双频热切延迟表现\n2. 补强长期增量更新与自定义镜像源支持\n3. 增强多录屏源自动切片归档稳定性",
+                    "release_url": "https://github.com/Iraryi/WireDeck/releases/tag/v0.3.0",
+                    "error": "",
+                },
+                "plugins": {
+                    "ok": True,
+                    "installed_count": 2,
+                    "updates_count": 1,
+                    "up_to_date_count": 1,
+                    "updates_available": [
+                        {
+                            "id": "framegen-sharpen",
+                            "name": "补帧与超分增强 (Lossless / Magpie)",
+                            "current_version": "1.0.0",
+                            "latest_version": "1.1.0",
+                            "has_update": True,
+                        }
+                    ],
+                    "plugins": [
+                        {
+                            "id": "framegen-sharpen",
+                            "name": "补帧与超分增强 (Lossless / Magpie)",
+                            "enabled": True,
+                            "current_version": "1.0.0",
+                            "latest_version": "1.1.0",
+                            "has_update": True,
+                            "in_catalog": True,
+                        },
+                        {
+                            "id": "nvidia-driver-toolkit",
+                            "name": "NVIDIA 显卡优化工具包",
+                            "enabled": True,
+                            "current_version": "1.0.0",
+                            "latest_version": "1.0.0",
+                            "has_update": False,
+                            "in_catalog": True,
+                        },
+                    ],
+                    "error": "",
+                },
+            }
+        res = check_all_updates(
+            self.paths,
+            self.cfg,
+            override_channel=force_channel,
+            override_url=force_url,
+        )
+        self._last_update_check = res
+        return res
+
+    def save_update_settings(self, patch: dict[str, Any]) -> dict[str, Any]:
+        if "update_channel" in patch:
+            ch = str(patch["update_channel"] or "stable").strip().lower()
+            if ch in ("stable", "beta"):
+                self.cfg.update_channel = ch
+        if "update_feed_url" in patch:
+            self.cfg.update_feed_url = str(patch["update_feed_url"] or "").strip()
+        if "auto_check_updates" in patch:
+            self.cfg.auto_check_updates = bool(patch["auto_check_updates"])
+        if not self._preview_state:
+            save_config(self.paths, self.cfg)
+        return {"ok": True, "config": self.cfg.to_dict()}
+
+    def apply_core_update(self, update_info: dict[str, Any] | None = None) -> dict[str, Any]:
+        if self._preview_state:
+            return ActionResult(
+                ok=True,
+                code="PREVIEW_ONLY",
+                message="预览模式下已模拟校验 SHA-256 并启动覆盖更新",
+                details={"mode": "installer", "should_exit": False},
+            ).to_dict()
+        info = update_info or (self._last_update_check or {}).get("app")
+        if not isinstance(info, dict) or not info.get("download_url"):
+            chk = check_all_updates(self.paths, self.cfg)
+            self._last_update_check = chk
+            info = chk.get("app") or {}
+        if not info.get("has_update"):
+            return ActionResult(ok=True, code="UP_TO_DATE", message=f"当前 v{APP_VERSION} 已是最新版本").to_dict()
+        stg = download_and_stage_app_update(info, self.paths)
+        if not stg.ok:
+            return stg.to_dict()
+        ap = apply_staged_app_update(Path(str(stg.details.get("staged_path") or "")), self.paths)
+        if ap.ok and ap.details.get("should_exit") and self._window is not None:
+            def _close_soon() -> None:
+                time.sleep(0.45)
+                try:
+                    if self._window is not None:
+                        self._window.destroy()
+                except Exception:
+                    pass
+
+            threading.Thread(target=_close_soon, daemon=True).start()
+        return ap.to_dict()
+
+    def update_all_plugins(self, plugin_ids: list[str] | None = None) -> dict[str, Any]:
+        if self._preview_state:
+            return ActionResult(
+                ok=True,
+                code="PREVIEW_ONLY",
+                message="预览模式下已模拟更新全部插件（保留个人参数）",
+                details={"updated": [{"id": "framegen-sharpen", "version": "1.1.0"}], "failed": []},
+            ).to_dict()
+        return updater_update_all_plugins(self.paths, self.cfg, plugin_ids=plugin_ids).to_dict()
+
+    def open_release_url(self, url: str = "") -> dict[str, Any]:
+        target = (url or "").strip() or "https://github.com/Iraryi/WireDeck/releases"
+        if not target.startswith(("https://", "http://")):
+            return {"ok": False, "message": "无效的发布页面链接"}
+        webbrowser.open(target)
+        return {"ok": True}
+
+    def scan_uninstall_items(self) -> dict[str, Any]:
+        if self._preview_state == "uninstall":
+            return {
+                "ok": True,
+                "is_portable": False,
+                "exe_dir": "C:\\Users\\Demo\\AppData\\Local\\Programs\\WireDeck",
+                "data_dir": "C:\\Users\\Demo\\AppData\\Local\\WireDeck",
+                "uninstaller_exe": "C:\\Users\\Demo\\AppData\\Local\\Programs\\WireDeck\\unins000.exe",
+                "network_restore": {"needed": True, "nat_active": True, "wifi_tuned": False, "default_selected": False},
+                "wiredeck_items": [
+                    {"id": "wd_shortcuts", "count": 2, "size_mb": 0.01, "paths": ["Desktop\\XStreaming.lnk"], "default_selected": False},
+                    {"id": "wd_plugins", "count": 14, "size_mb": 3.2, "paths": ["data\\plugins"], "default_selected": False},
+                    {"id": "wd_userdata", "count": 6, "size_mb": 1.85, "paths": ["LocalAppData\\WireDeck"], "default_selected": False},
+                ],
+                "associated_apps": [
+                    {
+                        "id": "assoc_xstreaming",
+                        "spec_id": "xstreaming",
+                        "name": "XStreaming",
+                        "category": "stream_client",
+                        "version": "1.9.6",
+                        "install_location": "C:\\Program Files\\XStreaming",
+                        "uninstall_command": "C:\\Program Files\\XStreaming\\Uninstall.exe",
+                        "used_by_wiredeck": True,
+                        "default_selected": False,
+                    },
+                    {
+                        "id": "assoc_obs",
+                        "spec_id": "obs",
+                        "name": "OBS Studio",
+                        "category": "recorder",
+                        "version": "31.0.1",
+                        "install_location": "C:\\Program Files\\obs-studio",
+                        "uninstall_command": "C:\\Program Files\\obs-studio\\uninstall.exe",
+                        "used_by_wiredeck": True,
+                        "default_selected": False,
+                    },
+                    {
+                        "id": "assoc_moonlight",
+                        "spec_id": "moonlight",
+                        "name": "Moonlight Game Streaming",
+                        "category": "stream_client",
+                        "version": "6.1.0",
+                        "install_location": "C:\\Program Files\\Moonlight Game Streaming",
+                        "uninstall_command": "C:\\Program Files\\Moonlight Game Streaming\\uninstall.exe",
+                        "used_by_wiredeck": False,
+                        "default_selected": False,
+                    },
+                ],
+                "associated_cleanup_default_enabled": False,
+                "recorded_clips_protected": True,
+                "recorded_clips_dir": "E:\\XboxClips",
+            }
+        scan = discover_uninstall_items(self.paths, self.cfg)
+        self._last_uninstall_scan = scan
+        return scan
+
+    def execute_uninstall(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        data = payload or {}
+        selected_ids = [str(x) for x in (data.get("selected_ids") or []) if str(x).strip()]
+        restore_network = bool(data.get("restore_network", False))
+        if self._preview_state:
+            return ActionResult(
+                ok=True,
+                code="PREVIEW_ONLY",
+                message=f"预览模式：已模拟执行 {len(selected_ids)} 项可选清理并准备卸载主程序",
+                details={"executed": [{"id": x, "ok": True, "message": "preview"} for x in selected_ids], "failed": []},
+            ).to_dict()
+
+        def _restore_net_cb() -> ActionResult:
+            ok_r, view_r = _run_quick_restore(self, silent=False)
+            return ActionResult(
+                ok=ok_r,
+                code="NET_RESTORED" if ok_r else "NET_RESTORE_FAILED",
+                message="已将 WinNAT / Wi-Fi 恢复为日常网络模式" if ok_r else f"部分网络未能自动恢复（请检查 {view_r}），可稍后手动恢复",
+                exit_code=0 if ok_r else 1,
+            )
+
+        res = execute_uninstall_cleanup(
+            self.paths,
+            self.cfg,
+            selected_ids,
+            restore_network=restore_network,
+            discovered=self._last_uninstall_scan,
+            restore_network_fn=_restore_net_cb,
+        )
+
+        if self._from_uninstaller:
+            self._uninstall_exit_code = 0
+            def _close_for_inno() -> None:
+                time.sleep(0.35)
+                try:
+                    if self._window is not None:
+                        self._window.destroy()
+                except Exception:
+                    pass
+
+            threading.Thread(target=_close_for_inno, daemon=True).start()
+            return res.to_dict()
+
+        self_res = launch_self_uninstall(self.paths)
+        combined = res.to_dict()
+        combined["self_uninstall"] = self_res.to_dict()
+        if self_res.ok and (self_res.details or {}).get("should_exit"):
+            def _close_self() -> None:
+                time.sleep(0.4)
+                try:
+                    if self._window is not None:
+                        self._window.destroy()
+                except Exception:
+                    pass
+
+            threading.Thread(target=_close_self, daemon=True).start()
+        return combined
+
+    def cancel_uninstall_wizard(self) -> dict[str, Any]:
+        self._uninstall_exit_code = 2
+        if self._window is not None and (self._uninstall_wizard or self._preview_state == "uninstall"):
+            def _close_cancel() -> None:
+                time.sleep(0.15)
+                try:
+                    if self._window is not None:
+                        self._window.destroy()
+                except Exception:
+                    pass
+
+            threading.Thread(target=_close_cancel, daemon=True).start()
+        return {"ok": True, "cancelled": True}
+
     def shutdown(self) -> None:
         if not self._preview_state:
             try:
@@ -2051,7 +2344,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="WireDeck", add_help=True)
     parser.add_argument(
         "--preview-state",
-        choices=["ready", "breakpoint", "wizard", "ai", "settings", "onboarding", "wireless", "wireless_lan", "wireless_wizard", "plugins", "recorder"],
+        choices=["ready", "breakpoint", "wizard", "ai", "settings", "onboarding", "wireless", "wireless_lan", "wireless_wizard", "plugins", "recorder", "update", "uninstall"],
         default=None,
         help="Open GUI in deterministic read-only preview mode",
     )
@@ -2127,10 +2420,34 @@ def main(argv: list[str] | None = None) -> int:
         default=[],
         help="Temporary plugin override in plugin_id.key=value format",
     )
+    parser.add_argument(
+        "--uninstall-wizard",
+        action="store_true",
+        help="Open dedicated interactive WireDeck uninstall wizard",
+    )
+    parser.add_argument(
+        "--from-uninstaller",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
     args = parser.parse_args(argv)
 
-    title = f"{APP_NAME} v{APP_VERSION}"
-    api = WireDeckApi(preview_state=args.preview_state, preview_wizard_step=args.wizard_step)
+    is_uninstall_mode = bool(args.uninstall_wizard or args.preview_state == "uninstall")
+    api = WireDeckApi(
+        preview_state=args.preview_state,
+        preview_wizard_step=args.wizard_step,
+        uninstall_wizard=bool(args.uninstall_wizard),
+        from_uninstaller=bool(args.from_uninstaller),
+    )
+    if args.theme:
+        api.cfg.theme = args.theme
+    if args.lang:
+        api.cfg.language = args.lang
+    title = (
+        f"{APP_NAME} Uninstall"
+        if is_uninstall_mode and api.cfg.language == "en"
+        else (f"{APP_NAME} 卸载向导" if is_uninstall_mode else f"{APP_NAME} v{APP_VERSION}")
+    )
     plugin_overrides = _parse_plugin_opt_args(args.plugin_opt)
 
     if args.quick_play and not args.preview_state:
@@ -2208,7 +2525,7 @@ def main(argv: list[str] | None = None) -> int:
             return 1
 
     mutex_handle: int | None = None
-    if not args.preview_state and not args.capture_to:
+    if not args.preview_state and not args.capture_to and not args.uninstall_wizard:
         mutex_handle = _acquire_single_instance_mutex(title)
         if mutex_handle == -1:
             return 0
@@ -2240,13 +2557,15 @@ def main(argv: list[str] | None = None) -> int:
     index_url = (web_dir / "index.html").resolve().as_uri()
     bg_hex = "#202020" if api.cfg.theme == "dark" else "#f3f3f3"
 
+    win_w, win_h = (660, 565) if is_uninstall_mode else (840, 520)
+    min_sz = (600, 480) if is_uninstall_mode else (760, 480)
     window = webview.create_window(
         title=title,
         url=index_url,
         js_api=api,
-        width=840,
-        height=520,
-        min_size=(760, 480),
+        width=win_w,
+        height=win_h,
+        min_size=min_sz,
         background_color=bg_hex,
         resizable=True,
     )
@@ -2254,7 +2573,7 @@ def main(argv: list[str] | None = None) -> int:
 
     def _on_started() -> None:
         _set_titlebar_theme(title, api.cfg.theme == "dark")
-        if not args.preview_state and not args.capture_to:
+        if not args.preview_state and not args.capture_to and not args.uninstall_wizard:
             threading.Thread(
                 target=lambda: emit_plugin_hook(
                     api.paths,
@@ -2287,7 +2606,7 @@ def main(argv: list[str] | None = None) -> int:
         start_kwargs["icon"] = str(icon_file)
 
     webview.start(_on_started, **start_kwargs)
-    return 0
+    return int(api._uninstall_exit_code) if args.uninstall_wizard else 0
 
 
 if __name__ == "__main__":

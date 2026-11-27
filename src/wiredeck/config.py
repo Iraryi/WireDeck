@@ -25,6 +25,7 @@ VALID_RECORDER_MODES = ("manual", "replay", "auto_record")
 VALID_FFMPEG_FORMATS = ("mkv", "mp4", "mov", "ts", "flv")
 VALID_FFMPEG_ENCODERS = ("auto", "av1_nvenc", "hevc_nvenc", "h264_nvenc", "libx264")
 VALID_SPLIT_MODES = ("off", "time", "size", "both")
+VALID_UPDATE_CHANNELS = ("stable", "beta")
 DEFAULT_FILENAME_TEMPLATE = "{preset}_{date}_{time}"
 
 
@@ -195,6 +196,9 @@ class AppConfig:
         http_bridge_enabled: bool = False,
         onboarding_completed: bool = False,
         plugin_registry_url: str = "",
+        update_channel: str = "stable",
+        update_feed_url: str = "",
+        auto_check_updates: bool = True,
         keep_awake_during_stream: bool = True,
         auto_restore_on_exit: bool = False,
         recorder: RecorderSettings | None = None,
@@ -227,6 +231,10 @@ class AppConfig:
         self.http_bridge_enabled = bool(http_bridge_enabled)
         self.onboarding_completed = bool(onboarding_completed)
         self.plugin_registry_url = plugin_registry_url.strip() if isinstance(plugin_registry_url, str) else ""
+        ch = str(update_channel or "stable").strip().lower()
+        self.update_channel = ch if ch in VALID_UPDATE_CHANNELS else "stable"
+        self.update_feed_url = update_feed_url.strip() if isinstance(update_feed_url, str) else ""
+        self.auto_check_updates = bool(auto_check_updates)
         self.keep_awake_during_stream = bool(keep_awake_during_stream)
         self.auto_restore_on_exit = bool(auto_restore_on_exit)
         self.recorder = recorder if isinstance(recorder, RecorderSettings) else RecorderSettings()
@@ -361,6 +369,9 @@ class AppConfig:
             "http_bridge_enabled": self.http_bridge_enabled,
             "onboarding_completed": self.onboarding_completed,
             "plugin_registry_url": self.plugin_registry_url,
+            "update_channel": self.update_channel,
+            "update_feed_url": self.update_feed_url,
+            "auto_check_updates": self.auto_check_updates,
             "keep_awake_during_stream": self.keep_awake_during_stream,
             "auto_restore_on_exit": self.auto_restore_on_exit,
             "recorder": self.recorder.to_dict(),
@@ -500,6 +511,9 @@ def _normalize_config(raw: dict[str, Any]) -> AppConfig:
         http_bridge_enabled=bool(raw.get("http_bridge_enabled", False)),
         onboarding_completed=bool(raw.get("onboarding_completed", False)),
         plugin_registry_url=str(raw.get("plugin_registry_url", "") or "").strip() if isinstance(raw.get("plugin_registry_url", ""), str) else "",
+        update_channel=str(raw.get("update_channel", "stable") or "stable").strip().lower(),
+        update_feed_url=str(raw.get("update_feed_url", "") or "").strip() if isinstance(raw.get("update_feed_url", ""), str) else "",
+        auto_check_updates=bool(raw.get("auto_check_updates", True)),
         keep_awake_during_stream=bool(raw.get("keep_awake_during_stream", True)),
         auto_restore_on_exit=bool(raw.get("auto_restore_on_exit", False)),
         recorder=normalize_recorder_settings(raw.get("recorder")),
@@ -546,6 +560,9 @@ def save_config(paths: AppPaths, cfg: AppConfig) -> None:
         "http_bridge_enabled": cfg.http_bridge_enabled,
         "onboarding_completed": cfg.onboarding_completed,
         "plugin_registry_url": cfg.plugin_registry_url,
+        "update_channel": cfg.update_channel,
+        "update_feed_url": cfg.update_feed_url,
+        "auto_check_updates": cfg.auto_check_updates,
         "keep_awake_during_stream": cfg.keep_awake_during_stream,
         "auto_restore_on_exit": cfg.auto_restore_on_exit,
         "recorder": cfg.recorder.to_dict(),

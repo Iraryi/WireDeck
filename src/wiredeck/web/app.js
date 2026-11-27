@@ -51,6 +51,8 @@
     recorderPollTimer: null,
     activeRenameClip: null,
     systemHealth: null,
+    updateReport: null,
+    uninstallScan: null,
   };
 
   function t(key) {
@@ -68,6 +70,10 @@
       const k = el.getAttribute("data-i18n-placeholder");
       if (k) el.setAttribute("placeholder", t(k));
     });
+    document.querySelectorAll("[data-i18n-title]").forEach((el) => {
+      const k = el.getAttribute("data-i18n-title");
+      if (k) el.setAttribute("title", t(k));
+    });
     const refreshBtn = document.getElementById("btnRefresh");
     if (refreshBtn) refreshBtn.title = t("btn_refresh");
     const wRefreshBtn = document.getElementById("btnWRefresh");
@@ -81,6 +87,12 @@
     }
     if (document.getElementById("viewPlugins") && document.getElementById("viewPlugins").classList.contains("active")) {
       renderPluginsView();
+    }
+    if (document.getElementById("updateModal") && document.getElementById("updateModal").classList.contains("open") && state.updateReport) {
+      renderUpdateModal(state.updateReport);
+    }
+    if (document.getElementById("uninstallModal") && document.getElementById("uninstallModal").classList.contains("open") && state.uninstallScan) {
+      renderUninstallModal(state.uninstallScan);
     }
   }
 
@@ -2829,6 +2841,279 @@
     renderRecorderView();
   }
 
+  function renderUpdateModal(rep) {
+    state.updateReport = rep || null;
+    const cfg = (state.appState && state.appState.config) || {};
+    const appInfo = (rep && rep.app) || {};
+    const plgInfo = (rep && rep.plugins) || {};
+
+    const modeTag = document.getElementById("updCoreModeTag");
+    if (modeTag) {
+      modeTag.textContent = t((state.appState && state.appState.is_portable) ? "upd_mode_portable" : "upd_mode_installer");
+    }
+    const verBadge = document.getElementById("updCoreVerBadge");
+    if (verBadge) {
+      const curV = appInfo.current_version || (state.appState && state.appState.app_version) || "0.2.2";
+      const latV = appInfo.latest_version || "";
+      verBadge.textContent = appInfo.has_update && latV ? `v${curV} → v${latV}` : `v${curV}`;
+    }
+
+    const statusBadge = document.getElementById("updCoreStatusBadge");
+    const applyBtn = document.getElementById("btnUpdApplyCore");
+    const notesBox = document.getElementById("updReleaseNotes");
+    const shaTag = document.getElementById("updShaTag");
+    const relBtn = document.getElementById("btnUpdOpenRelease");
+
+    if (statusBadge) {
+      if (!rep) {
+        statusBadge.className = "upd-badge";
+        statusBadge.textContent = t("upd_checking");
+      } else if (!appInfo.ok) {
+        statusBadge.className = "upd-badge err";
+        statusBadge.textContent = appInfo.error || t("upd_check_failed");
+      } else if (appInfo.has_update) {
+        statusBadge.className = "upd-badge has-update";
+        statusBadge.textContent = t("upd_new_available").replace("{v}", appInfo.latest_version || "");
+      } else {
+        statusBadge.className = "upd-badge";
+        statusBadge.textContent = t("upd_up_to_date");
+      }
+    }
+
+    if (notesBox) {
+      const notes = String(appInfo.release_notes || "").trim();
+      if (notes) {
+        notesBox.textContent = notes;
+        notesBox.style.display = "block";
+      } else {
+        notesBox.style.display = "none";
+      }
+    }
+
+    if (shaTag) {
+      if (appInfo.sha256_ready && appInfo.sha256) {
+        shaTag.textContent = `SHA-256: ${appInfo.sha256.slice(0, 16)}… (${appInfo.asset_name || "pkg"})`;
+      } else if (appInfo.has_update) {
+        shaTag.textContent = t("upd_no_sha");
+      } else {
+        shaTag.textContent = `SHA-256: —`;
+      }
+    }
+
+    if (applyBtn) {
+      applyBtn.disabled = !(appInfo.ok && appInfo.has_update && appInfo.sha256_ready && appInfo.download_url);
+    }
+    if (relBtn) {
+      relBtn.dataset.url = appInfo.release_url || "";
+    }
+
+    const dot = document.getElementById("updateDot");
+    if (dot) dot.classList.toggle("show", Boolean(rep && rep.has_any_update));
+
+    const plgListEl = document.getElementById("updPluginsList");
+    const updAllPlgBtn = document.getElementById("btnUpdAllPlugins");
+    const items = plgInfo.plugins || [];
+    const updCount = Number(plgInfo.updates_count || 0);
+    if (updAllPlgBtn) {
+      updAllPlgBtn.disabled = updCount <= 0;
+    }
+    if (plgListEl) {
+      plgListEl.innerHTML = "";
+      if (!items.length) {
+        const empty = document.createElement("div");
+        empty.className = "row-desc";
+        empty.textContent = t("upd_no_plugins_installed");
+        plgListEl.appendChild(empty);
+      } else {
+        items.forEach((p) => {
+          const row = document.createElement("div");
+          row.className = "upd-plugin-row";
+          row.innerHTML = `
+            <div>
+              <strong>${escapeHtml(p.name || p.id)}</strong>
+              <span class="mono" style="margin-left:6px;color:var(--text-muted);">v${escapeHtml(p.current_version)}</span>
+            </div>
+            <span class="${p.has_update ? "upd-badge has-update" : "row-desc"}">
+              ${p.has_update ? escapeHtml(`→ v${p.latest_version}`) : escapeHtml(t("upd_plugin_latest"))}
+            </span>
+          `;
+          plgListEl.appendChild(row);
+        });
+      }
+    }
+
+    const chSel = document.getElementById("updChannel");
+    const autoCb = document.getElementById("updAutoCheck");
+    const feedIn = document.getElementById("updFeedUrl");
+    if (chSel) chSel.value = cfg.update_channel || "stable";
+    if (autoCb) autoCb.checked = cfg.auto_check_updates !== false;
+    if (feedIn) feedIn.value = cfg.update_feed_url || "";
+  }
+
+  async function openUpdateModal(runCheckNow) {
+    renderUpdateModal(state.updateReport);
+    document.getElementById("updateModal").classList.add("open");
+    if (runCheckNow || !state.updateReport) {
+      await runUpdateCheck(false);
+    }
+  }
+
+  async function runUpdateCheck(silentDotOnly) {
+    const api = getApi();
+    if (!api || !api.check_updates) return;
+    if (!silentDotOnly) renderUpdateModal(null);
+    try {
+      const ch = (document.getElementById("updChannel") || {}).value || "";
+      const url = (document.getElementById("updFeedUrl") || {}).value || "";
+      const res = await api.check_updates(silentDotOnly ? "" : ch, silentDotOnly ? "" : url.trim());
+      state.updateReport = res;
+      const dot = document.getElementById("updateDot");
+      if (dot) dot.classList.toggle("show", Boolean(res && res.has_any_update));
+      if (!silentDotOnly) {
+        renderUpdateModal(res);
+      }
+    } catch (err) {
+      if (!silentDotOnly) showToast(String(err));
+    }
+  }
+
+  function updateUninstallSummary() {
+    const sumEl = document.getElementById("uninstSummaryText");
+    if (!sumEl) return;
+    const wdChecked = document.querySelectorAll(".uninst-wd-cb:checked").length;
+    const assocOn = Boolean(document.getElementById("uninstAssocToggle") && document.getElementById("uninstAssocToggle").checked);
+    const assocChecked = assocOn ? document.querySelectorAll(".uninst-assoc-cb:checked").length : 0;
+    sumEl.textContent = t("uninst_summary")
+      .replace("{wd}", String(wdChecked))
+      .replace("{assoc}", String(assocChecked));
+  }
+
+  function renderUninstallModal(scan) {
+    state.uninstallScan = scan || null;
+    const metaEl = document.getElementById("uninstMetaLine");
+    if (metaEl && scan) {
+      const modeTxt = scan.is_portable ? t("upd_mode_portable") : t("upd_mode_installer");
+      metaEl.textContent = `${modeTxt} · ${scan.exe_dir || ""}`;
+    }
+
+    const netRow = document.getElementById("uninstNetRow");
+    const netCb = document.getElementById("uninstRestoreNetCb");
+    const netDesc = document.getElementById("uninstNetDesc");
+    const netInfo = (scan && scan.network_restore) || {};
+    if (netRow && netCb) {
+      if (netInfo.needed) {
+        netRow.style.display = "block";
+        netCb.checked = true;
+        const parts = [];
+        if (netInfo.nat_active) parts.push("WireDeckNat");
+        if (netInfo.wifi_tuned) parts.push("Wi-Fi");
+        if (netDesc) netDesc.textContent = `${t("uninst_net_active_prefix")} ${parts.join(" + ")}`;
+      } else {
+        netRow.style.display = "none";
+        netCb.checked = false;
+      }
+    }
+
+    const wdList = document.getElementById("uninstWdList");
+    const wdItems = (scan && scan.wiredeck_items) || [];
+    const wdTitleMap = {
+      wd_shortcuts: ["uninst_item_shortcuts", "uninst_item_shortcuts_d"],
+      wd_plugins: ["uninst_item_plugins", "uninst_item_plugins_d"],
+      wd_userdata: ["uninst_item_userdata", "uninst_item_userdata_d"],
+      wd_gpu_prefs: ["uninst_item_gpu", "uninst_item_gpu_d"],
+    };
+    if (wdList) {
+      wdList.innerHTML = "";
+      if (!wdItems.length) {
+        const emp = document.createElement("div");
+        emp.className = "uninst-check-item";
+        emp.innerHTML = `<span class="row-desc">${escapeHtml(t("uninst_no_wd_items"))}</span>`;
+        wdList.appendChild(emp);
+      } else {
+        wdItems.forEach((item) => {
+          const [tk, dk] = wdTitleMap[item.id] || [item.id, item.id];
+          const lbl = document.createElement("label");
+          lbl.className = "uninst-check-item";
+          const sz = Number(item.size_mb || 0) > 0 ? `${item.size_mb} MB` : `${item.count || 0}`;
+          lbl.innerHTML = `
+            <span class="uninst-check-left">
+              <input type="checkbox" class="uninst-wd-cb" value="${escapeHtml(item.id)}" />
+              <span>
+                <div class="row-head">${escapeHtml(t(tk) || item.id)}</div>
+                <div class="row-desc">${escapeHtml(t(dk) || (item.paths || []).join(", "))}</div>
+              </span>
+            </span>
+            <span class="ext-tag mono">${escapeHtml(sz)}</span>
+          `;
+          wdList.appendChild(lbl);
+        });
+      }
+    }
+
+    // Companion apps section ALWAYS starts OFF & UNCHECKED!
+    const assocToggle = document.getElementById("uninstAssocToggle");
+    const assocList = document.getElementById("uninstAssocList");
+    const assocSub = document.getElementById("uninstAssocSub");
+    const assocApps = (scan && scan.associated_apps) || [];
+    if (assocToggle) assocToggle.checked = false;
+    if (assocList) {
+      assocList.style.display = "none";
+      assocList.innerHTML = "";
+      if (!assocApps.length) {
+        if (assocToggle) assocToggle.disabled = true;
+        if (assocSub) assocSub.textContent = t("uninst_assoc_none");
+      } else {
+        if (assocToggle) assocToggle.disabled = false;
+        if (assocSub) {
+          assocSub.textContent = t("uninst_assoc_detected").replace("{n}", String(assocApps.length));
+        }
+        assocApps.forEach((app) => {
+          const lbl = document.createElement("label");
+          lbl.className = "uninst-check-item";
+          const catTag = t(`uninst_cat_${app.category}`) || app.category;
+          const verTxt = app.version ? `v${app.version}` : catTag;
+          lbl.innerHTML = `
+            <span class="uninst-check-left">
+              <input type="checkbox" class="uninst-assoc-cb" value="${escapeHtml(app.id)}" />
+              <span>
+                <div class="row-head">
+                  ${escapeHtml(app.name)}
+                  ${app.used_by_wiredeck ? `<span class="ext-tag" style="margin-left:5px;">${escapeHtml(t("uninst_used_tag"))}</span>` : ""}
+                </div>
+                <div class="row-desc mono">${escapeHtml(app.install_location || t("uninst_official_uninstaller"))}</div>
+              </span>
+            </span>
+            <span class="ext-tag">${escapeHtml(verTxt)}</span>
+          `;
+          assocList.appendChild(lbl);
+        });
+      }
+    }
+
+    const progBox = document.getElementById("uninstProgressBox");
+    if (progBox) {
+      progBox.style.display = "none";
+      progBox.textContent = "";
+    }
+    document.querySelectorAll(".uninst-wd-cb, .uninst-assoc-cb").forEach((cb) => {
+      cb.checked = false;
+      cb.addEventListener("change", updateUninstallSummary);
+    });
+    updateUninstallSummary();
+  }
+
+  async function openUninstallWizard(standalone) {
+    const api = getApi();
+    if (standalone) {
+      document.body.classList.add("uninstall-standalone");
+    }
+    document.getElementById("uninstallModal").classList.add("open");
+    if (api && api.scan_uninstall_items) {
+      const scan = await api.scan_uninstall_items();
+      renderUninstallModal(scan);
+    }
+  }
+
   async function refreshAll(silent) {
     const api = getApi();
     if (!api) return;
@@ -2836,8 +3121,16 @@
     try {
       const st = await api.get_state();
       state.appState = st;
-      document.getElementById("versionLabel").textContent = "v" + st.app_version;
+      const verTextEl = document.getElementById("versionText");
+      if (verTextEl) verTextEl.textContent = "v" + st.app_version;
+      else document.getElementById("versionLabel").textContent = "v" + st.app_version;
       syncConfigDisplay(st.config);
+
+      if (st.uninstall_wizard_mode) {
+        await openUninstallWizard(true);
+        return;
+      }
+
       renderBridgeState(st.bridge);
 
       const activeT = st.preview_view === "wireless"
@@ -2886,6 +3179,11 @@
           await switchView(st.preview_view, true);
         } else if (state.transport === "wireless") {
           await switchView("wireless", true);
+        }
+        if (st.preview_state === "update") {
+          await openUpdateModal(true);
+        } else if (!st.preview_state && st.config && st.config.auto_check_updates !== false) {
+          setTimeout(() => runUpdateCheck(true), 1200);
         }
       }
       if (st.show_onboarding && !state.onboardingDismissed) {
@@ -3498,6 +3796,119 @@
         const jr = res && res.job && res.job.result;
         if (jr && (jr.message || jr.code)) showToast(jr.message || jr.code);
         await refreshAll(true);
+      }
+    });
+
+    // Update Center events
+    document.getElementById("versionLabel").addEventListener("click", () => openUpdateModal(true));
+    document.getElementById("btnOpenUpdates").addEventListener("click", () => openUpdateModal(true));
+    document.getElementById("btnUpdClose").addEventListener("click", () => {
+      document.getElementById("updateModal").classList.remove("open");
+    });
+    document.getElementById("btnUpdRecheck").addEventListener("click", () => runUpdateCheck(false));
+    document.getElementById("btnUpdOpenRelease").addEventListener("click", () => {
+      const api = getApi();
+      const btn = document.getElementById("btnUpdOpenRelease");
+      if (api && api.open_release_url) api.open_release_url((btn && btn.dataset.url) || "");
+    });
+    document.getElementById("btnUpdSaveCfg").addEventListener("click", async () => {
+      const api = getApi();
+      if (!api || !api.save_update_settings) return;
+      const patch = {
+        update_channel: (document.getElementById("updChannel") || {}).value || "stable",
+        update_feed_url: ((document.getElementById("updFeedUrl") || {}).value || "").trim(),
+        auto_check_updates: Boolean(document.getElementById("updAutoCheck") && document.getElementById("updAutoCheck").checked),
+      };
+      await api.save_update_settings(patch);
+      showToast(t("toast_saved"));
+      await runUpdateCheck(false);
+    });
+    document.getElementById("btnUpdApplyCore").addEventListener("click", async () => {
+      const api = getApi();
+      if (!api || !api.apply_core_update) return;
+      const btn = document.getElementById("btnUpdApplyCore");
+      btn.disabled = true;
+      showToast(t("upd_downloading"));
+      try {
+        const res = await api.apply_core_update((state.updateReport && state.updateReport.app) || null);
+        showToast((res && res.message) || "OK");
+      } finally {
+        btn.disabled = false;
+      }
+    });
+    document.getElementById("btnUpdAllPlugins").addEventListener("click", async () => {
+      const api = getApi();
+      if (!api || !api.update_all_plugins) return;
+      const btn = document.getElementById("btnUpdAllPlugins");
+      btn.disabled = true;
+      showToast(t("toast_working"));
+      try {
+        const res = await api.update_all_plugins(null);
+        showToast((res && res.message) || "OK");
+        await loadPluginsData(false);
+        await runUpdateCheck(false);
+      } finally {
+        btn.disabled = false;
+      }
+    });
+
+    // Interactive Uninstaller events
+    document.getElementById("btnOpenUninstall").addEventListener("click", () => openUninstallWizard(false));
+    document.getElementById("uninstAssocToggle").addEventListener("change", (e) => {
+      const on = Boolean(e.target.checked);
+      const listEl = document.getElementById("uninstAssocList");
+      if (listEl) listEl.style.display = on ? "block" : "none";
+      if (!on) {
+        document.querySelectorAll(".uninst-assoc-cb").forEach((cb) => {
+          cb.checked = false;
+        });
+      }
+      updateUninstallSummary();
+    });
+    document.getElementById("btnUninstCancel").addEventListener("click", async () => {
+      const api = getApi();
+      if (document.body.classList.contains("uninstall-standalone") && api && api.cancel_uninstall_wizard) {
+        await api.cancel_uninstall_wizard();
+      } else {
+        document.getElementById("uninstallModal").classList.remove("open");
+      }
+    });
+    document.getElementById("btnUninstConfirm").addEventListener("click", async () => {
+      const api = getApi();
+      if (!api || !api.execute_uninstall) return;
+      const btn = document.getElementById("btnUninstConfirm");
+      const cancelBtn = document.getElementById("btnUninstCancel");
+      const progBox = document.getElementById("uninstProgressBox");
+
+      const selected = [];
+      document.querySelectorAll(".uninst-wd-cb:checked").forEach((cb) => selected.push(cb.value));
+      const assocOn = Boolean(document.getElementById("uninstAssocToggle") && document.getElementById("uninstAssocToggle").checked);
+      if (assocOn) {
+        document.querySelectorAll(".uninst-assoc-cb:checked").forEach((cb) => selected.push(cb.value));
+      }
+      const restoreNet = Boolean(document.getElementById("uninstRestoreNetCb") && document.getElementById("uninstRestoreNetCb").checked);
+
+      btn.disabled = true;
+      cancelBtn.disabled = true;
+      if (progBox) {
+        progBox.style.display = "block";
+        progBox.textContent = t("uninst_running");
+      }
+      try {
+        const res = await api.execute_uninstall({ selected_ids: selected, restore_network: restoreNet });
+        const lines = [res.message || "OK"];
+        ((res.details && res.details.executed) || []).forEach((it) => lines.push(`✓ ${it.message}`));
+        ((res.details && res.details.failed) || []).forEach((it) => lines.push(`! ${it.message}`));
+        if (res.self_uninstall && res.self_uninstall.message) {
+          lines.push(`→ ${res.self_uninstall.message}`);
+        }
+        if (progBox) {
+          progBox.innerHTML = lines.map((l) => `<div>${escapeHtml(l)}</div>`).join("");
+        }
+        showToast(res.message || "OK");
+      } finally {
+        btn.disabled = false;
+        cancelBtn.disabled = false;
       }
     });
   }

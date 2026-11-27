@@ -50,6 +50,14 @@ from wiredeck.probes import collect_system_snapshot
 from wiredeck.ps_runner import is_admin, run_elevated_worker, run_powershell
 from wiredeck.system_env import collect_system_env, evaluate_system_health
 from wiredeck.toolkits import discover_all_toolkits, discover_toolkits, run_toolkit
+from wiredeck.uninstaller import discover_uninstall_items
+from wiredeck.updater import (
+    apply_staged_app_update,
+    build_update_manifest,
+    check_all_updates,
+    download_and_stage_app_update,
+    update_all_plugins,
+)
 from wiredeck.version import APP_NAME, APP_VERSION, NAT_NAME, SCHEMA_VERSION
 
 
@@ -278,6 +286,34 @@ def _build_parser() -> argparse.ArgumentParser:
 
     p_doc = sub.add_parser("doctor", help="Run whole-system readiness & health check across power, GPU, storage, and plugins")
     p_doc.add_argument("--json", action="store_true", dest="as_json")
+
+    p_upd = sub.add_parser("update", help="Check or apply WireDeck core & plugin updates")
+    upd_sub = p_upd.add_subparsers(dest="update_cmd")
+
+    p_upd_chk = upd_sub.add_parser("check", help="Check core binary & installed plugin updates")
+    p_upd_chk.add_argument("--channel", choices=["stable", "beta"], default="")
+    p_upd_chk.add_argument("--url", default="")
+    p_upd_chk.add_argument("--json", action="store_true", dest="as_json")
+
+    p_upd_app = upd_sub.add_parser("apply", help="Apply available updates (plugins and/or core)")
+    p_upd_app.add_argument("--plugins-only", action="store_true")
+    p_upd_app.add_argument("--core-only", action="store_true")
+    p_upd_app.add_argument("--channel", choices=["stable", "beta"], default="")
+    p_upd_app.add_argument("--url", default="")
+    p_upd_app.add_argument("--silent", action="store_true")
+    p_upd_app.add_argument("--json", action="store_true", dest="as_json")
+
+    p_upd_man = upd_sub.add_parser("manifest", help="Generate wiredeck-update/v1 JSON manifest from release artifacts")
+    p_upd_man.add_argument("release_dir", help="Directory containing built setup/portable artifacts")
+    p_upd_man.add_argument("--base-url", required=True, help="Public base download URL for release assets")
+    p_upd_man.add_argument("--channel", choices=["stable", "beta"], default="stable")
+    p_upd_man.add_argument("--notes", default="")
+    p_upd_man.add_argument("--release-url", default="")
+    p_upd_man.add_argument("--out", default="")
+    p_upd_man.add_argument("--json", action="store_true", dest="as_json")
+
+    p_uninst = sub.add_parser("uninstall-scan", help="Scan WireDeck data & optional associated apps (all default OFF)")
+    p_uninst.add_argument("--json", action="store_true", dest="as_json")
 
     return parser
 
@@ -627,6 +663,107 @@ def main(argv: list[str] | None = None) -> int:
         for w in health.get("warnings") or []:
             lines.append(f"  ! [{w.get('code')}] {w.get('title')}: {w.get('detail')}")
         _emit(health, args.as_json, "\n".join(lines))
+        return 0
+
+    if args.command == "update":
+        if args.update_cmd == "check":
+            res_u = check_all_updates(
+                paths,
+                cfg,
+                override_channel=args.channel,
+                override_url=args.url,
+            )
+            app_u = res_u.get("app") or {}
+            plg_u = res_u.get("plugins") or {}
+            lines = [
+                f"{APP_NAME} v{APP_VERSION} Update Check | channel={app_u.get('channel')} | core_update={app_u.get('has_update')} (latest={app_u.get('latest_version') or '-'}) | plugin_updates={plg_u.get('updates_count', 0)}"
+            ]
+            for pu in plg_u.get("updates_available") or []:
+                lines.append(f"  * Plugin {pu.get('id')}: {pu.get('current_version')} -> {pu.get('latest_version')}")
+            _emit(res_u, args.as_json, "\n".join(lines))
+            return 0 if res_u.get("ok") else 1
+
+        if args.update_cmd == "apply":
+            plugin_res_dict: dict[str, Any] | None = None
+            core_res_dict: dict[str, Any] | None = None
+            overall_ok = True
+
+            if not args.core_only:
+                pr = update_all_plugins(paths, cfg)
+                plugin_res_dict = pr.to_dict()
+                if not pr.ok:
+                    overall_ok = False
+
+            if not args.plugins_only:
+                chk = check_all_updates(
+                    paths,
+                    cfg,
+                    override_channel=args.channel,
+                    override_url=args.url,
+                )
+                app_u = chk.get("app") or {}
+                if not app_u.get("ok"):
+                    overall_ok = False
+                    core_res_dict = ActionResult(
+                        ok=False,
+                        code="CORE_CHECK_FAILED",
+                        message=str(app_u.get("error") or "无法获取主程序更新"),
+                        exit_code=1,
+                    ).to_dict()
+                elif not app_u.get("has_update"):
+                    core_res_dict = ActionResult(
+                        ok=True,
+                        code="UP_TO_DATE",
+                        message=f"WireDeck 已是最新版本 v{APP_VERSION}",
+                    ).to_dict()
+                else:
+                    stg = download_and_stage_app_update(app_u, paths)
+                    if not stg.ok:
+                        overall_ok = False
+                        core_res_dict = stg.to_dict()
+                    else:
+                        ap = apply_staged_app_update(
+                            Path(str(stg.details.get("staged_path") or "")),
+                            paths,
+                            silent=bool(args.silent),
+                        )
+                        if not ap.ok:
+                            overall_ok = False
+                        core_res_dict = ap.to_dict()
+
+            payload = {"ok": overall_ok, "plugins": plugin_res_dict, "core": core_res_dict}
+            _emit(payload, args.as_json, json.dumps(payload, ensure_ascii=False, indent=2))
+            return 0 if overall_ok else 1
+
+        if args.update_cmd == "manifest":
+            manifest = build_update_manifest(
+                APP_VERSION,
+                Path(args.release_dir),
+                base_download_url=args.base_url,
+                channel=args.channel,
+                release_notes=args.notes,
+                release_url=args.release_url,
+            )
+            if args.out:
+                out_p = Path(args.out)
+                out_p.parent.mkdir(parents=True, exist_ok=True)
+                out_p.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            _emit(manifest, True if args.as_json else False)
+            return 0
+
+        parser.parse_args(["update", "--help"])
+        return 0
+
+    if args.command == "uninstall-scan":
+        scan = discover_uninstall_items(paths, cfg)
+        lines = [
+            f"{APP_NAME} v{APP_VERSION} Uninstall Scan (companion cleanup default OFF):",
+            f"  WireDeck items: {len(scan.get('wiredeck_items') or [])}",
+            f"  Associated apps: {len(scan.get('associated_apps') or [])}",
+        ]
+        for app_e in scan.get("associated_apps") or []:
+            lines.append(f"  - [{app_e.get('category')}] {app_e.get('name')} ({app_e.get('version') or '-'}) default_selected={app_e.get('default_selected')}")
+        _emit(scan, args.as_json, "\n".join(lines))
         return 0
 
     return 1

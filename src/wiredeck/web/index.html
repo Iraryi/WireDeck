@@ -68,7 +68,10 @@
         </nav>
 
         <div class="rail-foot">
-          <span id="versionLabel">v0.1.0</span>
+          <button class="rail-ver-btn" id="versionLabel" type="button" data-i18n-title="upd_open_title" title="检查更新">
+            <span id="versionText">v0.2.2</span>
+            <span class="ver-dot" id="updateDot"></span>
+          </button>
           <span id="modeLabel">日常模式</span>
         </div>
       </aside>
@@ -566,7 +569,10 @@
               <div class="page-title" data-i18n="settings_title">设置</div>
               <div class="page-sub" data-i18n="settings_sub">各设备预设的参数相互独立保存，共享本机有线/无线环境</div>
             </div>
-            <button class="btn btn-sm btn-primary" id="btnSaveSettings" type="button" data-i18n="btn_save">保存</button>
+            <div class="row-actions">
+              <button class="btn btn-sm" id="btnOpenUpdates" type="button" data-i18n="set_check_updates">检查更新</button>
+              <button class="btn btn-sm btn-primary" id="btnSaveSettings" type="button" data-i18n="btn_save">保存</button>
+            </div>
           </div>
 
           <div class="sec-label" data-i18n="set_sec_shared">本机共享环境</div>
@@ -655,7 +661,8 @@
             <div class="setting-row compact">
               <div class="row-actions">
                 <button class="btn btn-sm btn-danger" id="btnResetNic" type="button" data-i18n="set_reset_nic">恢复网卡出厂 DHCP</button>
-                <button class="btn btn-sm" id="btnRerunOnboarding" type="button" data-i18n="set_rerun_onboarding">重新运行开局设置</button>
+                <button class="btn btn-sm" id="btnRerunOnboarding" type="button" data-i18n="set_rerun_onboarding">开局设置</button>
+                <button class="btn btn-sm" id="btnOpenUninstall" type="button" data-i18n="set_uninstall_wizard">卸载向导</button>
               </div>
               <div class="row-actions">
                 <button class="btn btn-sm" id="btnOpenLogs" type="button" data-i18n="set_open_logs">日志目录</button>
@@ -799,6 +806,143 @@
       <div class="modal-actions">
         <button class="btn btn-sm" id="btnRenameClipCancel" type="button" data-i18n="btn_cancel">取消</button>
         <button class="btn btn-sm btn-primary" id="btnRenameClipOk" type="button" data-i18n="btn_save">保存</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Update Center Modal (Core + Plugins + Long-Term Extensible Channel/Feed) -->
+  <div class="modal-backdrop" id="updateModal">
+    <div class="modal modal-wide modal-update">
+      <div class="upd-head">
+        <div>
+          <div class="modal-title" data-i18n="upd_title">WireDeck 更新中心</div>
+          <div class="page-sub" id="updSubText" data-i18n="upd_sub">检查主程序与已安装 GitHub 插件版本，下载均经 SHA-256 严格校验</div>
+        </div>
+        <button class="btn btn-sm" id="btnUpdRecheck" type="button" data-i18n="upd_recheck">重新检查</button>
+      </div>
+
+      <div class="upd-card">
+        <div class="upd-card-top">
+          <div class="row-actions" style="gap:7px;">
+            <span class="row-head" data-i18n="upd_core_title">WireDeck 主程序</span>
+            <span class="ext-tag mono" id="updCoreModeTag">安装版</span>
+            <span class="ext-tag" id="updCoreVerBadge">v0.2.2</span>
+          </div>
+          <span class="upd-badge" id="updCoreStatusBadge">—</span>
+        </div>
+        <div class="upd-notes detail-scroll" id="updReleaseNotes" style="display:none;"></div>
+        <div class="upd-card-foot">
+          <span class="row-desc mono" id="updShaTag">SHA-256: —</span>
+          <div class="row-actions">
+            <button class="btn btn-sm" id="btnUpdOpenRelease" type="button" data-i18n="upd_open_release">查看发布页</button>
+            <button class="btn btn-sm btn-primary" id="btnUpdApplyCore" type="button" disabled data-i18n="upd_apply_core">下载校验并更新</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="upd-card">
+        <div class="upd-card-top">
+          <span class="row-head" data-i18n="upd_plugins_title">已安装插件版本</span>
+          <button class="btn btn-sm" id="btnUpdAllPlugins" type="button" disabled data-i18n="upd_plugins_all">一键更新全部插件</button>
+        </div>
+        <div class="upd-plugins-list detail-scroll" id="updPluginsList"></div>
+      </div>
+
+      <details class="adv-box" id="updSourceDetails">
+        <summary data-i18n="upd_source_summary">长期更新源与通道设置（稳定版 / 测试版 / 自定义 Manifest）</summary>
+        <div class="upd-source-grid">
+          <div class="setting-row compact">
+            <span class="setting-label" data-i18n="upd_channel_lbl">更新通道与启动检测</span>
+            <div class="row-actions" style="gap:10px;">
+              <label class="inline-check">
+                <input type="checkbox" id="updAutoCheck" checked />
+                <span data-i18n="upd_auto_check">启动时自动检查更新</span>
+              </label>
+              <select id="updChannel">
+                <option value="stable" data-i18n="upd_ch_stable">稳定版 (Stable)</option>
+                <option value="beta" data-i18n="upd_ch_beta">抢先测试版 (Beta)</option>
+              </select>
+            </div>
+          </div>
+          <div class="setting-row compact">
+            <span class="setting-label" data-i18n="upd_feed_lbl">自定义更新源 URL（可选）</span>
+            <div class="row-actions" style="flex:1;justify-content:flex-end;">
+              <input id="updFeedUrl" class="mono" style="width:285px;" data-i18n-placeholder="upd_feed_ph" placeholder="留空使用官方 GitHub Releases API" />
+              <button class="btn btn-sm" id="btnUpdSaveCfg" type="button" data-i18n="btn_save">保存</button>
+            </div>
+          </div>
+        </div>
+      </details>
+
+      <div class="modal-actions">
+        <button class="btn btn-sm" id="btnUpdClose" type="button" data-i18n="btn_close">关闭</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Interactive Uninstaller Modal / Standalone Window (Companion Cleanup DEFAULT OFF) -->
+  <div class="modal-backdrop" id="uninstallModal">
+    <div class="modal modal-wide modal-uninstall">
+      <div class="uninst-head">
+        <div class="row-actions" style="gap:10px;">
+          <svg class="rail-logo" viewBox="0 0 256 256" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+            <rect x="16" y="16" width="224" height="224" rx="40" fill="#24292F"/>
+            <path d="M56 64 H200 V168 H164 V192 H92 V168 H56 Z" fill="#161B22" stroke="#D0D7DE" stroke-width="11" stroke-linejoin="round"/>
+            <rect x="82" y="70" width="12" height="44" rx="3" fill="#E3B341"/>
+            <rect x="108" y="70" width="12" height="44" rx="3" fill="#E3B341"/>
+            <rect x="136" y="70" width="12" height="44" rx="3" fill="#E3B341"/>
+            <rect x="162" y="70" width="12" height="44" rx="3" fill="#E3B341"/>
+          </svg>
+          <div>
+            <div class="modal-title" data-i18n="uninst_title">WireDeck 交互式卸载向导</div>
+            <div class="page-sub mono" id="uninstMetaLine">—</div>
+          </div>
+        </div>
+        <span class="ext-tag" data-i18n="uninst_core_badge">仅默认移除主程序</span>
+      </div>
+
+      <div class="uninst-safe-banner" id="uninstSafeBanner">
+        <span class="uninst-shield">✓</span>
+        <span data-i18n="uninst_safe_notice">您的录像视频、游戏存档、显卡驱动与 Windows 系统组件绝不会被删除。所有额外清理默认均为未开启/未勾选。</span>
+      </div>
+
+      <div class="uninst-scroll detail-scroll">
+        <div class="uninst-net-row" id="uninstNetRow" style="display:none;">
+          <label class="inline-check" style="white-space:normal;">
+            <input type="checkbox" id="uninstRestoreNetCb" />
+            <div>
+              <div class="row-head" data-i18n="uninst_net_title">卸载前将网络恢复为日常模式（推荐）</div>
+              <div class="row-desc" id="uninstNetDesc">检测到 WireDeckNat 或 Wi-Fi 防抖策略仍在运行</div>
+            </div>
+          </label>
+        </div>
+
+        <div class="sec-label" data-i18n="uninst_sec_wd">WireDeck 自身可选清理（默认均保留，需手动勾选）</div>
+        <div class="uninst-group" id="uninstWdList"></div>
+
+        <div class="uninst-assoc-box">
+          <div class="uninst-assoc-head">
+            <div>
+              <div class="row-head" data-i18n="uninst_assoc_title">与 WireDeck 关联的其他程序（默认不开启）</div>
+              <div class="row-desc" id="uninstAssocSub" data-i18n="uninst_assoc_sub">开启后才可手动勾选关联软件，并调用其官方卸载程序移除</div>
+            </div>
+            <label class="win-switch" title="Companion cleanup (default OFF)">
+              <input type="checkbox" id="uninstAssocToggle" />
+              <span class="win-slider"></span>
+            </label>
+          </div>
+          <div class="uninst-assoc-list" id="uninstAssocList" style="display:none;"></div>
+        </div>
+      </div>
+
+      <div class="uninst-progress" id="uninstProgressBox" style="display:none;"></div>
+
+      <div class="uninst-foot">
+        <span class="row-desc" id="uninstSummaryText">—</span>
+        <div class="row-actions">
+          <button class="btn btn-sm" id="btnUninstCancel" type="button" data-i18n="uninst_btn_cancel">取消卸载</button>
+          <button class="btn btn-sm btn-danger" id="btnUninstConfirm" type="button" data-i18n="uninst_btn_confirm">确认并卸载 WireDeck</button>
+        </div>
       </div>
     </div>
   </div>

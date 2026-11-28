@@ -20,7 +20,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
-from wiredeck.config import AppConfig, DEFAULT_FILENAME_TEMPLATE, VALID_SPLIT_MODES
+from wiredeck.config import AppConfig, DEFAULT_FILENAME_TEMPLATE, VALID_CAPTURE_SCOPES, VALID_SPLIT_MODES
 from wiredeck.models import ActionResult
 from wiredeck.paths import AppPaths, ensure_within
 from wiredeck.ps_runner import CREATE_NO_WINDOW, PsResult, run_powershell
@@ -51,6 +51,32 @@ FAT32_SAFE_SPLIT_MB = 3800
 CRITICAL_FREE_BYTES = 512 * 1024 * 1024
 _SEQ_PREFIX_RE = re.compile(r"^(\d+)_")
 _ILLEGAL_WIN_CHARS_RE = re.compile(r'[<>:"/\\|?*\x00-\x1f]+')
+
+STREAM_CLIENT_PROCESS_NAMES: dict[str, tuple[str, ...]] = {
+    "xbox": ("xstreaming.exe", "xstreamingdesktop.exe", "xboxpcapp.exe", "xboxapp.exe", "greenlight.exe"),
+    "playstation": ("chiaki.exe", "chiaki-ng.exe", "remoteplay.exe", "psremoteplay.exe"),
+    "handheld": ("moonlight.exe", "steam.exe", "parsec.exe", "parsecd.exe"),
+    "other": ("moonlight.exe", "parsec.exe", "parsecd.exe", "xstreaming.exe", "chiaki-ng.exe"),
+    "switch": ("xstreaming.exe",),
+}
+
+_CAPTURE_CARD_KEYWORDS: tuple[str, ...] = (
+    "capture",
+    "hdmi",
+    "usb video",
+    "usb3",
+    "elgato",
+    "avermedia",
+    "cam link",
+    "ugreen",
+    "mirabox",
+    "ezcap",
+    "ms21",
+    "game capture",
+    "live gamer",
+    "magewell",
+    "decklink",
+)
 
 
 def cleanup_stale_part_files(target_dir: Path, *, min_age_sec: float = 600.0) -> dict[str, Any]:
@@ -135,18 +161,248 @@ def _pick_preferred_audio_device(devices: list[str]) -> str:
     return devices[0]
 
 
-def get_next_sequence_index(target_dir: Path | str) -> int:
-    """Scan `target_dir` for video files with leading `<n>_` prefix and return `max + 1` (min 1)."""
+def detect_ffmpeg_video_devices(
+    ffmpeg_exe: str,
+    *,
+    runner: Callable[[list[str]], subprocess.CompletedProcess[str]] | None = None,
+) -> list[dict[str, Any]]:
+    """Query DirectShow video capture devices (HDMI/USB capture cards, webcams) from FFmpeg."""
+    exe = (ffmpeg_exe or "").strip()
+    if not exe:
+        return []
+    try:
+        if runner is not None:
+            proc = runner([exe, "-hide_banner", "-list_devices", "true", "-f", "dshow", "-i", "dummy"])
+        else:
+            proc = subprocess.run(
+                [exe, "-hide_banner", "-list_devices", "true", "-f", "dshow", "-i", "dummy"],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=4,
+                creationflags=CREATE_NO_WINDOW if os.name == "nt" else 0,
+            )
+    except Exception:
+        return []
+
+    raw_text = "\n".join(x for x in (getattr(proc, "stderr", "") or "", getattr(proc, "stdout", "") or "") if x)
+    devices: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    in_video_section = False
+    for line in raw_text.splitlines():
+        low = line.lower()
+        if "directshow video devices" in low:
+            in_video_section = True
+            continue
+        if "directshow audio devices" in low:
+            in_video_section = False
+            continue
+        if "(video)" in low or (in_video_section and "alternative name" not in low):
+            m = re.search(r'"([^"]+)"', line)
+            if m:
+                name = m.group(1).strip()
+                if name and name not in seen:
+                    seen.add(name)
+                    is_card = any(kw in name.lower() for kw in _CAPTURE_CARD_KEYWORDS)
+                    devices.append({"name": name, "is_capture_card": is_card})
+    devices.sort(key=lambda d: (0 if d["is_capture_card"] else 1, d["name"].lower()))
+    return devices
+
+
+def _match_stream_window(cfg: AppConfig, windows: list[dict[str, Any]]) -> dict[str, Any] | None:
+    preset_procs = list(STREAM_CLIENT_PROCESS_NAMES.get(cfg.active_preset, ()))
+    custom = (cfg.custom_client_path or "").strip()
+    if custom:
+        c_exe = Path(custom).name.lower()
+        if c_exe and c_exe not in preset_procs:
+            preset_procs.insert(0, c_exe)
+    all_known = list(dict.fromkeys(
+        preset_procs + [p for plist in STREAM_CLIENT_PROCESS_NAMES.values() for p in plist]
+    ))
+
+    for target_proc in all_known:
+        for w in windows:
+            if str(w.get("process_name") or "").lower() == target_proc:
+                return w
+
+    title_hints = ("xstreaming", "chiaki", "moonlight", "ps remote play", "remote play")
+    for w in windows:
+        tl = str(w.get("title") or "").lower()
+        if any(h in tl for h in title_hints):
+            return w
+    return None
+
+
+def _match_specific_window(title_want: str, exe_want: str, windows: list[dict[str, Any]]) -> dict[str, Any] | None:
+    tw = (title_want or "").strip().lower()
+    ew = Path(exe_want.strip()).name.lower() if (exe_want or "").strip() else ""
+    if not tw and not ew:
+        return None
+    for w in windows:
+        if tw and str(w.get("title") or "").strip().lower() == tw:
+            return w
+    if ew:
+        for w in windows:
+            if str(w.get("process_name") or "").strip().lower() == ew:
+                return w
+    if tw:
+        for w in windows:
+            if tw in str(w.get("title") or "").strip().lower():
+                return w
+    return None
+
+
+def resolve_capture_target(
+    cfg: AppConfig,
+    *,
+    windows: list[dict[str, Any]] | None = None,
+    video_devices: list[dict[str, Any]] | None = None,
+    win32_ops: Win32Ops | None = None,
+) -> dict[str, Any]:
+    """Resolve what WireDeck should capture (stream window, chosen window, capture card, or desktop)."""
+    rec = cfg.recorder
+    scope = (rec.capture_scope or "stream_window").strip().lower()
+    if scope not in VALID_CAPTURE_SCOPES:
+        scope = "stream_window"
+
+    ops = win32_ops or default_win32_ops()
+    win_list = windows if windows is not None else (ops.list_windows() if ops.list_windows else [])
+
+    if scope == "desktop":
+        return {
+            "scope": scope,
+            "effective_scope": "desktop",
+            "ready": True,
+            "fell_back_to_desktop": False,
+            "hwnd": 0,
+            "window_title": "",
+            "window_exe": "",
+            "window_class": "",
+            "is_minimized": False,
+            "video_device": "",
+            "label": "整个电脑屏幕",
+            "warning": "",
+        }
+
+    if scope == "capture_card":
+        devs = video_devices
+        if devs is None:
+            ff = _find_ffmpeg_exe(rec.ffmpeg_exe_path)
+            devs = detect_ffmpeg_video_devices(ff) if ff else []
+        chosen_dev = rec.capture_video_device.strip()
+        if not chosen_dev and devs:
+            cards = [d for d in devs if d.get("is_capture_card")]
+            chosen_dev = str((cards[0] if cards else devs[0]).get("name") or "")
+        if chosen_dev:
+            return {
+                "scope": scope,
+                "effective_scope": "capture_card",
+                "ready": True,
+                "fell_back_to_desktop": False,
+                "hwnd": 0,
+                "window_title": "",
+                "window_exe": "",
+                "window_class": "",
+                "is_minimized": False,
+                "video_device": chosen_dev,
+                "label": chosen_dev,
+                "warning": "",
+            }
+        return {
+            "scope": scope,
+            "effective_scope": "blocked",
+            "ready": False,
+            "fell_back_to_desktop": False,
+            "hwnd": 0,
+            "window_title": "",
+            "window_exe": "",
+            "window_class": "",
+            "is_minimized": False,
+            "video_device": "",
+            "label": "",
+            "warning": "未检测到 HDMI/USB 采集卡或视频采集设备，请插好设备后刷新，或切换为串流窗口/桌面",
+        }
+
+    matched = (
+        _match_stream_window(cfg, win_list)
+        if scope == "stream_window"
+        else _match_specific_window(rec.capture_window_title, rec.capture_window_exe, win_list)
+    )
+    if matched is not None:
+        title = str(matched.get("title") or "")
+        exe = str(matched.get("process_name") or "")
+        cls_name = str(matched.get("class_name") or "")
+        is_min = bool(matched.get("is_minimized"))
+        return {
+            "scope": scope,
+            "effective_scope": "window",
+            "ready": True,
+            "fell_back_to_desktop": False,
+            "hwnd": int(matched.get("hwnd") or 0),
+            "window_title": title,
+            "window_exe": exe,
+            "window_class": cls_name,
+            "is_minimized": is_min,
+            "video_device": "",
+            "label": title or exe,
+            "warning": "目标窗口目前处于最小化状态；开录时会自动唤醒到后台（请勿关闭）" if is_min else "",
+        }
+
+    if rec.strict_window_only:
+        msg = (
+            "未检测到正在运行的串流客户端窗口（已开启防误录桌面保护）"
+            if scope == "stream_window"
+            else "未找到指定的目标窗口（已开启防误录桌面保护）"
+        )
+        return {
+            "scope": scope,
+            "effective_scope": "blocked",
+            "ready": False,
+            "fell_back_to_desktop": False,
+            "hwnd": 0,
+            "window_title": rec.capture_window_title,
+            "window_exe": rec.capture_window_exe,
+            "window_class": "",
+            "is_minimized": False,
+            "video_device": "",
+            "label": rec.capture_window_title or "目标窗口未打开",
+            "warning": msg,
+        }
+
+    return {
+        "scope": scope,
+        "effective_scope": "desktop",
+        "ready": True,
+        "fell_back_to_desktop": True,
+        "hwnd": 0,
+        "window_title": "",
+        "window_exe": "",
+        "window_class": "",
+        "is_minimized": False,
+        "video_device": "",
+        "label": "桌面兜底（串流窗口未打开）" if scope == "stream_window" else "桌面兜底（目标窗口未打开）",
+        "warning": "暂未打开目标游戏窗口，开录将暂时拍全屏（开启串流或勾选防误录可锁定纯游戏画面）",
+    }
+
+
+def get_next_sequence_index(
+    target_dir: Path | str,
+    *,
+    extensions: tuple[str, ...] | None = None,
+) -> int:
+    """Scan `target_dir` for captured files with leading `<n>_` prefix and return `max + 1` (min 1)."""
     raw = str(target_dir or "").strip()
     if not raw:
         return 1
     root = Path(raw)
     if not root.is_dir():
         return 1
+    exts = tuple(e.lower() for e in (extensions or SUPPORTED_VIDEO_EXTENSIONS))
     max_idx = 0
     try:
         for item in root.iterdir():
-            if not item.is_file() or item.suffix.lower() not in SUPPORTED_VIDEO_EXTENSIONS:
+            if not item.is_file() or item.suffix.lower() not in exts:
                 continue
             m = _SEQ_PREFIX_RE.match(item.name)
             if m:
@@ -620,6 +876,121 @@ def detect_obs_info(
     }
 
 
+def _format_obs_window_string(title: str, class_name: str, exe_name: str) -> str:
+    def _esc(s: str) -> str:
+        return (s or "").replace(":", "#3A")
+
+    return f"{_esc(title)}:{_esc(class_name)}:{_esc(exe_name)}"
+
+
+def sync_obs_capture_source(
+    capture_target: dict[str, Any],
+    *,
+    paths: AppPaths,
+    appdata_dir: Path | None = None,
+) -> dict[str, Any]:
+    """Configure WireDeck-managed OBS WGC Window / Capture Card / Display source without removing user sources."""
+    base_appdata = appdata_dir or (Path(os.environ["APPDATA"]) if os.environ.get("APPDATA") else (Path.home() / "AppData" / "Roaming"))
+    obs_root = base_appdata / "obs-studio"
+    global_ini = obs_root / "global.ini"
+    scene_file: Path | None = None
+
+    if global_ini.is_file():
+        try:
+            cp = configparser.RawConfigParser()
+            cp.optionxform = str  # type: ignore[assignment]
+            cp.read(global_ini, encoding="utf-8-sig")
+            sc_name = cp.get("Basic", "SceneCollectionFile", fallback="").strip()
+            if sc_name:
+                cand = obs_root / "basic" / "scenes" / f"{sc_name}.json"
+                if cand.is_file():
+                    scene_file = cand
+        except Exception:
+            pass
+
+    if scene_file is None:
+        scenes_dir = obs_root / "basic" / "scenes"
+        if scenes_dir.is_dir():
+            for child in sorted(scenes_dir.glob("*.json")):
+                scene_file = child
+                break
+
+    if scene_file is None or not scene_file.is_file():
+        return {"synced": False, "reason": "no_scene_file"}
+
+    try:
+        scene_data = json.loads(scene_file.read_text(encoding="utf-8-sig"))
+    except Exception:
+        return {"synced": False, "reason": "invalid_scene_json"}
+    if not isinstance(scene_data, dict):
+        return {"synced": False, "reason": "invalid_scene_root"}
+
+    paths.runtime_dir.mkdir(parents=True, exist_ok=True)
+    backup = paths.runtime_dir / "obs_scene_backup.json"
+    if not backup.is_file():
+        shutil.copy2(scene_file, backup)
+
+    eff = str(capture_target.get("effective_scope") or "desktop")
+    source_name = "WireDeck Capture"
+    if eff == "window":
+        win_str = _format_obs_window_string(
+            str(capture_target.get("window_title") or ""),
+            str(capture_target.get("window_class") or ""),
+            str(capture_target.get("window_exe") or ""),
+        )
+        src_id = "window_capture"
+        src_settings: dict[str, Any] = {
+            "method": 2,  # WGC: captures occluded background windows cleanly without showing overlays
+            "priority": 2,  # Match title, otherwise window of same executable
+            "window": win_str,
+            "cursor": False,
+            "client_area": True,
+        }
+    elif eff == "capture_card" and capture_target.get("video_device"):
+        src_id = "dshow_input"
+        src_settings = {
+            "video_device_id": str(capture_target.get("video_device") or ""),
+        }
+    else:
+        src_id = "monitor_capture"
+        src_settings = {"method": 0}
+
+    sources = scene_data.get("sources")
+    if not isinstance(sources, list):
+        sources = []
+        scene_data["sources"] = sources
+
+    existing_src = next((s for s in sources if isinstance(s, dict) and s.get("name") == source_name), None)
+    if existing_src is not None:
+        existing_src["id"] = src_id
+        existing_src["settings"] = src_settings
+    else:
+        sources.append(
+            {
+                "name": source_name,
+                "id": src_id,
+                "settings": src_settings,
+                "enabled": True,
+            }
+        )
+
+    cur_scene = str(scene_data.get("current_scene") or "")
+    scene_obj = next(
+        (s for s in sources if isinstance(s, dict) and s.get("id") == "scene" and (not cur_scene or s.get("name") == cur_scene)),
+        None,
+    )
+    if scene_obj is not None:
+        sc_settings = scene_obj.setdefault("settings", {})
+        items = sc_settings.setdefault("items", [])
+        if not any(isinstance(it, dict) and it.get("name") == source_name for it in items):
+            items.append({"name": source_name, "visible": True})
+
+    tmp_scene = scene_file.with_suffix(".json.wiredeck.tmp")
+    tmp_scene.write_text(json.dumps(scene_data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    os.replace(tmp_scene, scene_file)
+    return {"synced": True, "source_id": src_id, "scene_file": str(scene_file)}
+
+
 def sync_obs_output_dir(
     target_dir: str,
     *,
@@ -628,8 +999,9 @@ def sync_obs_output_dir(
     split_mode: str = "off",
     split_minutes: int = 30,
     split_size_mb: int = 2048,
+    capture_target: dict[str, Any] | None = None,
 ) -> ActionResult:
-    """Safely point OBS Studio's output folder and native Automatic File Splitting without altering formats."""
+    """Safely point OBS Studio's output folder, auto-split, and WireDeck Capture source."""
     out_raw = (target_dir or "").strip()
     if not out_raw:
         return ActionResult(ok=False, code="NO_OUTPUT_DIR", message="请先设置目标录像文件夹", exit_code=1)
@@ -695,15 +1067,28 @@ def sync_obs_output_dir(
     elif p_mode == "both":
         split_note = f"，并开启 {policy['split_minutes']} 分钟 / {policy['split_size_mb']} MB 自动分段"
 
+    src_sync: dict[str, Any] = {"synced": False}
+    src_note = ""
+    if capture_target is not None:
+        src_sync = sync_obs_capture_source(capture_target, paths=paths, appdata_dir=appdata_dir)
+        if src_sync.get("synced"):
+            if src_sync.get("source_id") == "window_capture":
+                src_note = "；已同步 WGC 窗口后台防遮挡采集源"
+            elif src_sync.get("source_id") == "dshow_input":
+                src_note = "；已同步采集卡输入源"
+            else:
+                src_note = "；已同步显示器采集源"
+
     return ActionResult(
         ok=True,
         code="OBS_SYNCED",
-        message=f"已将 OBS 录像输出目录同步至 {norm_dir}{split_note}（保留原编码与封装格式）",
+        message=f"已将 OBS 录像输出目录同步至 {norm_dir}{split_note}{src_note}（保留原编码与封装格式）",
         details={
             "basic_ini": str(ini_path),
             "output_dir": norm_dir,
             "record_format": obs.get("record_format", ""),
             "split_mode": p_mode,
+            "scene_sync": src_sync,
         },
     )
 
@@ -1005,8 +1390,11 @@ def build_ffmpeg_command(
     fps: int = 60,
     system_env: dict[str, Any] | None = None,
     audio_device: str = "",
+    capture_scope: str = "desktop",
+    window_title: str = "",
+    video_device: str = "",
 ) -> list[str]:
-    """Build universal low-overhead FFmpeg screen capture command preserving chosen format."""
+    """Build universal low-overhead FFmpeg capture command (desktop, targeted window, or capture card)."""
     enc = (encoder or "auto").strip().lower()
     if enc == "auto":
         nv = (system_env or {}).get("primary_nvidia_gpu")
@@ -1020,19 +1408,25 @@ def build_ffmpeg_command(
     rate = max(2, min(60, int(bitrate_mbps or 10)))
     fps_val = 30 if int(fps or 60) <= 30 else 60
     clean_audio = (audio_device or "").strip()
+    scope_norm = (capture_scope or "desktop").strip().lower()
+    clean_win = (window_title or "").strip()
+    clean_vdev = (video_device or "").strip()
 
-    cmd = [
-        ffmpeg_exe,
-        "-y",
-        "-f",
-        "gdigrab",
-        "-framerate",
-        str(fps_val),
-        "-i",
-        "desktop",
-    ]
+    cmd = [ffmpeg_exe, "-y"]
+    need_even_pad = False
+    if scope_norm == "capture_card" and clean_vdev:
+        cmd.extend(["-f", "dshow", "-framerate", str(fps_val), "-i", f"video={clean_vdev}"])
+    elif scope_norm in ("stream_window", "window") and clean_win:
+        cmd.extend(["-f", "gdigrab", "-framerate", str(fps_val), "-i", f"title={clean_win}"])
+        need_even_pad = True
+    else:
+        cmd.extend(["-f", "gdigrab", "-framerate", str(fps_val), "-i", "desktop"])
+
     if clean_audio:
         cmd.extend(["-f", "dshow", "-i", f"audio={clean_audio}"])
+    if need_even_pad:
+        # Ensure window capture width & height are always even for NVENC / H.264 / H.265 / AV1
+        cmd.extend(["-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2"])
     cmd.extend(
         [
             "-c:v",
@@ -1084,6 +1478,7 @@ class RecorderController:
         self._used_fallback: bool = False
         self._last_guard_event: str = ""
         self._active_audio_device: str = ""
+        self._active_capture_target: dict[str, Any] = {}
         self._active_policy: dict[str, Any] = resolve_effective_split_policy("off", 30, 2048)
         self._active_cfg: AppConfig | None = None
         self._active_paths: AppPaths | None = None
@@ -1140,6 +1535,9 @@ class RecorderController:
                 "active_out_dir": self._active_out_dir if active_now else "",
                 "last_guard_event": self._last_guard_event,
                 "split_policy": dict(self._active_policy),
+                "capture_scope": str(self._active_capture_target.get("effective_scope") or "") if active_now else "",
+                "capture_target_label": str(self._active_capture_target.get("label") or "") if active_now else "",
+                "fell_back_to_desktop": bool(self._active_capture_target.get("fell_back_to_desktop", False)) if active_now else False,
             }
 
     def _effective_backend(self, cfg: AppConfig, system_env: dict[str, Any] | None = None) -> str:
@@ -1181,6 +1579,7 @@ class RecorderController:
             mode=cfg.recorder.mode,
         )
         out_file = _unique_dest_path(out_dir, Path(fname))
+        tgt = self._active_capture_target or {}
         cmd = build_ffmpeg_command(
             self._active_ffmpeg_exe,
             out_file,
@@ -1190,6 +1589,9 @@ class RecorderController:
             fps=cfg.recorder.ffmpeg_fps,
             system_env=self._active_system_env,
             audio_device=self._active_audio_device,
+            capture_scope=str(tgt.get("effective_scope") or "desktop"),
+            window_title=str(tgt.get("window_title") or ""),
+            video_device=str(tgt.get("video_device") or ""),
         )
         creationflags = CREATE_NO_WINDOW if os.name == "nt" else 0
         popen_impl = self._popen_fn or subprocess.Popen
@@ -1512,6 +1914,24 @@ class RecorderController:
             rec.split_size_mb,
             filesystem=str(resolved.get("filesystem") or ""),
         )
+        ff_hint = _find_ffmpeg_exe(rec.ffmpeg_exe_path)
+        video_devs = detect_ffmpeg_video_devices(ff_hint) if (rec.capture_scope == "capture_card" and ff_hint) else []
+        capture_target = resolve_capture_target(
+            cfg,
+            video_devices=video_devs if rec.capture_scope == "capture_card" else None,
+            win32_ops=ops,
+        )
+        if not capture_target.get("ready") or capture_target.get("effective_scope") == "blocked":
+            return ActionResult(
+                ok=False,
+                code="CAPTURE_TARGET_MISSING",
+                message=str(capture_target.get("warning") or "未检测到目标录屏画面"),
+                exit_code=1,
+            )
+
+        if capture_target.get("hwnd") and capture_target.get("is_minimized"):
+            ops.restore_window_no_activate(int(capture_target["hwnd"]))
+            ops.sleep(0.15)
 
         with self._lock:
             self._active_cfg = cfg
@@ -1519,6 +1939,7 @@ class RecorderController:
             self._active_system_env = system_env
             self._active_win32_ops = ops
             self._active_policy = policy
+            self._active_capture_target = dict(capture_target)
             self._active_files = []
             self._segments_completed = 0
             self._last_guard_event = ""
@@ -1562,10 +1983,11 @@ class RecorderController:
                 self._is_recording = True
                 self._start_monitor_thread_locked()
                 fb_note = "（主盘离线，已自动切换本地备用盘）" if self._used_fallback else ""
+                tgt_note = f" [{capture_target.get('label')}]" if capture_target.get("label") else ""
                 return ActionResult(
                     ok=True,
                     code="RECORDING_STARTED",
-                    message=f"FFmpeg 正在录制并直写：{out_file.name}{fb_note}",
+                    message=f"FFmpeg 正在录制{tgt_note}并直写：{out_file.name}{fb_note}",
                     details={
                         "path": str(out_file),
                         "backend": "ffmpeg",
@@ -1573,6 +1995,7 @@ class RecorderController:
                         "used_fallback": self._used_fallback,
                         "audio_device": self._active_audio_device,
                         "split_policy": policy,
+                        "capture_target": capture_target,
                     },
                 )
 
@@ -1596,7 +2019,7 @@ class RecorderController:
                         ok=True,
                         code="OBS_STARTED",
                         message=f"已在后台启动 OBS（{'回放缓存' if rec.mode == 'replay' else '开始录制'}）",
-                        details={"backend": "obs", "args": args},
+                        details={"backend": "obs", "args": args, "capture_target": capture_target},
                     )
                 rec_hk, _ = self._effective_hotkeys(cfg, "obs")
                 ops.send_hotkey(rec_hk)
@@ -1604,7 +2027,12 @@ class RecorderController:
                 self._is_recording = True
                 if rec.mode != "replay":
                     self._start_monitor_thread_locked()
-                return ActionResult(ok=True, code="HOTKEY_SENT", message=f"已向运行中的 OBS 发送录制热键 {rec_hk}", details={"backend": "obs", "hotkey": rec_hk})
+                return ActionResult(ok=True, code="HOTKEY_SENT", message=f"已向运行中的 OBS 发送录制热键 {rec_hk}", details={"backend": "obs", "hotkey": rec_hk, "capture_target": capture_target})
+
+            # NVIDIA / Game Bar / Custom rely on foreground window focus
+            if capture_target.get("effective_scope") == "window" and capture_target.get("hwnd"):
+                ops.focus_window(int(capture_target["hwnd"]))
+                ops.sleep(0.2)
 
             if backend == "custom":
                 cexe = rec.custom_exe_path.strip()
@@ -1616,7 +2044,7 @@ class RecorderController:
                 self._is_recording = True
                 if rec.mode != "replay":
                     self._start_monitor_thread_locked()
-                return ActionResult(ok=True, code="HOTKEY_SENT", message=f"已启动/触发自定义录屏热键 {rec_hk}", details={"backend": "custom", "hotkey": rec_hk})
+                return ActionResult(ok=True, code="HOTKEY_SENT", message=f"已启动/触发自定义录屏热键 {rec_hk}", details={"backend": "custom", "hotkey": rec_hk, "capture_target": capture_target})
 
             # NVIDIA / Game Bar
             rec_hk, _ = self._effective_hotkeys(cfg, backend)
@@ -1626,7 +2054,7 @@ class RecorderController:
             if rec.mode != "replay":
                 self._start_monitor_thread_locked()
             label = "NVIDIA App" if backend == "nvidia" else "Xbox Game Bar"
-            return ActionResult(ok=True, code="HOTKEY_SENT", message=f"已触发 {label} 录制热键 {rec_hk}", details={"backend": backend, "hotkey": rec_hk})
+            return ActionResult(ok=True, code="HOTKEY_SENT", message=f"已触发 {label} 录制热键 {rec_hk}", details={"backend": backend, "hotkey": rec_hk, "capture_target": capture_target})
 
     def stop_recording(
         self,
@@ -1739,3 +2167,152 @@ class RecorderController:
                 )
             )
         return results
+
+
+def _capture_hwnd_png(hwnd: int, out_path: Path) -> bool:
+    """Capture a single window's DWM surface cleanly (even when occluded by other windows)."""
+    if os.name != "nt" or not hwnd:
+        return False
+    try:
+        import ctypes
+        from PIL import Image
+
+        user32 = ctypes.windll.user32
+        gdi32 = ctypes.windll.gdi32
+
+        class _RECT(ctypes.Structure):
+            _fields_ = [("left", ctypes.c_long), ("top", ctypes.c_long), ("right", ctypes.c_long), ("bottom", ctypes.c_long)]
+
+        class _BITMAPINFOHEADER(ctypes.Structure):
+            _fields_ = [
+                ("biSize", ctypes.c_uint32),
+                ("biWidth", ctypes.c_long),
+                ("biHeight", ctypes.c_long),
+                ("biPlanes", ctypes.c_uint16),
+                ("biBitCount", ctypes.c_uint16),
+                ("biCompression", ctypes.c_uint32),
+                ("biSizeImage", ctypes.c_uint32),
+                ("biXPelsPerMeter", ctypes.c_long),
+                ("biYPelsPerMeter", ctypes.c_long),
+                ("biClrUsed", ctypes.c_uint32),
+                ("biClrImportant", ctypes.c_uint32),
+            ]
+
+        rect = _RECT()
+        user32.GetWindowRect(hwnd, ctypes.byref(rect))
+        w = max(1, int(rect.right - rect.left))
+        h = max(1, int(rect.bottom - rect.top))
+
+        hdc_win = user32.GetWindowDC(hwnd)
+        hdc_mem = gdi32.CreateCompatibleDC(hdc_win)
+        hbmp = gdi32.CreateCompatibleBitmap(hdc_win, w, h)
+        gdi32.SelectObject(hdc_mem, hbmp)
+        user32.PrintWindow(hwnd, hdc_mem, 2)  # PW_RENDERFULLCONTENT = 2
+
+        bmi = _BITMAPINFOHEADER()
+        bmi.biSize = ctypes.sizeof(_BITMAPINFOHEADER)
+        bmi.biWidth = w
+        bmi.biHeight = -h
+        bmi.biPlanes = 1
+        bmi.biBitCount = 32
+        bmi.biCompression = 0
+
+        buf = ctypes.create_string_buffer(w * h * 4)
+        gdi32.GetDIBits(hdc_mem, hbmp, 0, h, buf, ctypes.byref(bmi), 0)
+        img = Image.frombuffer("RGBA", (w, h), buf, "raw", "BGRA", 0, 1).convert("RGB")
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        img.save(out_path, format="PNG")
+
+        gdi32.DeleteObject(hbmp)
+        gdi32.DeleteDC(hdc_mem)
+        user32.ReleaseDC(hwnd, hdc_win)
+        return out_path.is_file()
+    except Exception:
+        return False
+
+
+def _capture_desktop_png(out_path: Path) -> bool:
+    try:
+        from PIL import ImageGrab
+
+        img = ImageGrab.grab()
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        img.save(out_path, format="PNG")
+        return out_path.is_file()
+    except Exception:
+        return False
+
+
+def capture_screenshot(
+    cfg: AppConfig,
+    *,
+    output_dir: str = "",
+    win32_ops: Win32Ops | None = None,
+    capture_hwnd_fn: Callable[[int, Path], bool] | None = None,
+    capture_desktop_fn: Callable[[Path], bool] | None = None,
+) -> ActionResult:
+    """Take an instant PNG screenshot honoring `capture_scope` (window-isolated when locked)."""
+    ops = win32_ops or default_win32_ops()
+    rec = cfg.recorder
+    base_dir = (output_dir or rec.output_dir).strip()
+    resolved = resolve_recording_dir(
+        base_dir,
+        rec.fallback_dir,
+        bitrate_mbps=rec.ffmpeg_bitrate_mbps,
+        min_free_gb=rec.min_free_gb,
+    )
+    if resolved.get("configured") and not resolved.get("online"):
+        return ActionResult(
+            ok=False,
+            code="TARGET_OFFLINE",
+            message="; ".join(resolved.get("warnings") or ["目标存储盘离线"]),
+            exit_code=1,
+        )
+
+    shot_dir = Path(str(resolved.get("path") or (Path.home() / "Videos" / "WireDeck"))) / "Screenshots"
+    shot_dir.mkdir(parents=True, exist_ok=True)
+
+    target = resolve_capture_target(cfg, win32_ops=ops)
+    eff = str(target.get("effective_scope") or "desktop")
+    if eff == "blocked" or not target.get("ready"):
+        return ActionResult(
+            ok=False,
+            code="CAPTURE_TARGET_MISSING",
+            message=str(target.get("warning") or "未找到可截取的游戏画面"),
+            exit_code=1,
+        )
+
+    hwnd = int(target.get("hwnd") or 0)
+    if hwnd and target.get("is_minimized"):
+        ops.restore_window_no_activate(hwnd)
+        ops.sleep(0.15)
+
+    seq = get_next_sequence_index(shot_dir, extensions=(".png", ".jpg", ".jpeg"))
+    fname = render_clip_filename(
+        seq,
+        rec.filename_template,
+        ext="png",
+        preset=cfg.active_preset,
+        backend="screenshot",
+        mode=rec.mode,
+    )
+    out_file = _unique_dest_path(shot_dir, Path(fname))
+
+    hwnd_fn = capture_hwnd_fn or _capture_hwnd_png
+    desk_fn = capture_desktop_fn or _capture_desktop_png
+    ok = hwnd_fn(hwnd, out_file) if (eff == "window" and hwnd) else desk_fn(out_file)
+    if not ok:
+        return ActionResult(ok=False, code="SCREENSHOT_FAILED", message="截取画面失败，请检查目标窗口是否正在渲染", exit_code=1)
+
+    return ActionResult(
+        ok=True,
+        code="SCREENSHOT_SAVED",
+        message=f"已保存纯净截图：{out_file.name}",
+        details={
+            "path": str(out_file),
+            "filename": out_file.name,
+            "seq": seq,
+            "scope": eff,
+            "target": str(target.get("label") or ""),
+        },
+    )

@@ -19,8 +19,16 @@ from typing import Any, Callable
 
 from wiredeck.actions import execute_action
 from wiredeck.bridge import LocalBridgeServer
-from wiredeck.config import AppConfig, VALID_HOTSPOT_BANDS, load_config, normalize_recorder_settings, save_config
-from wiredeck.diagnostics import classify_snapshot, run_diagnosis
+from wiredeck.config import (
+    AppConfig,
+    VALID_HOTSPOT_BANDS,
+    export_config_backup,
+    import_config_backup,
+    load_config,
+    normalize_recorder_settings,
+    save_config,
+)
+from wiredeck.diagnostics import classify_snapshot, run_diagnosis, run_link_benchmark
 from wiredeck.exporter import export_diagnostic_bundle
 from wiredeck.extensions import discover_extensions, inspect_extensions, run_extension
 from wiredeck.models import ActionResult, DiagnosticReport, ExtensionRunResult, Severity
@@ -54,7 +62,9 @@ from wiredeck.probes import _ping_peer, collect_system_snapshot
 from wiredeck.ps_runner import is_admin, run_elevated_worker, run_powershell
 from wiredeck.recorder import (
     RecorderController,
+    capture_screenshot,
     delete_clip_file,
+    detect_ffmpeg_video_devices,
     detect_recorders,
     inspect_target_path,
     list_recorded_clips,
@@ -63,6 +73,7 @@ from wiredeck.recorder import (
     preview_clip_filenames,
     prune_clips_by_quota,
     rename_clip_with_forced_seq,
+    resolve_capture_target,
     resolve_effective_split_policy,
     sync_obs_output_dir,
 )
@@ -1252,6 +1263,15 @@ class WireDeckApi:
         fb_pending = 0
         if fb_dir and fb_dir != t_dir and Path(fb_dir).is_dir():
             fb_pending = int(list_recorded_clips(fb_dir).get("total_count") or 0)
+        w_rep = self._last_wireless_report
+        band_24g = False
+        if self.cfg.active_transport == "wireless" and w_rep is not None:
+            w2 = next((l for l in w_rep.layers if l.layer == "W2"), None)
+            w3 = next((l for l in w_rep.layers if l.layer == "W3"), None)
+            band_24g = bool(
+                (w2 and "2.4" in str(w2.metrics.get("band") or ""))
+                or (w3 and "two" in str(w3.metrics.get("hotspot_band") or "").lower())
+            )
         return evaluate_system_health(
             system_env=sys_env,
             cfg_dict=self.cfg.to_dict(),
@@ -1260,6 +1280,7 @@ class WireDeckApi:
             effective_split=eff,
             fallback_pending_count=fb_pending,
             installed_plugins=list_installed_plugins(self.paths),
+            wifi_band_24g=band_24g,
         )
 
     def pick_plugin_file(self, file_filter: str = "") -> dict[str, Any]:
@@ -1425,6 +1446,27 @@ class WireDeckApi:
             },
             "is_recording": False,
             "active_file": "",
+            "capture_target": {
+                "scope": "stream_window",
+                "effective_scope": "window",
+                "ready": True,
+                "fell_back_to_desktop": False,
+                "hwnd": 1001,
+                "window_title": "XStreaming",
+                "window_exe": "XStreaming.exe",
+                "window_class": "Chrome_WidgetWin_1",
+                "is_minimized": False,
+                "video_device": "",
+                "label": "XStreaming",
+                "warning": "",
+            },
+            "open_windows": [
+                {"hwnd": 1001, "title": "XStreaming", "process_name": "XStreaming.exe", "class_name": "Chrome_WidgetWin_1", "is_minimized": False, "width": 1920, "height": 1080},
+                {"hwnd": 1002, "title": "Chiaki-ng", "process_name": "chiaki-ng.exe", "class_name": "Qt6QWindowIcon", "is_minimized": False, "width": 1280, "height": 720},
+            ],
+            "video_devices": [
+                {"name": "USB3.0 HD Video Capture", "is_capture_card": True},
+            ],
             "clips_summary": {
                 "ok": True,
                 "total_count": 2,
@@ -1463,6 +1505,15 @@ class WireDeckApi:
         preview_ext = rec.ffmpeg_format if detected["effective_backend"] == "ffmpeg" else (
             (detected.get("obs") or {}).get("record_format") or rec.ffmpeg_format or "mkv"
         )
+        ff_exe = str((detected.get("ffmpeg") or {}).get("exe_path") or "")
+        open_wins = self._win32_ops.list_windows() if self._win32_ops.list_windows else []
+        vid_devs = detect_ffmpeg_video_devices(ff_exe) if (ff_exe and rec.capture_scope == "capture_card") else []
+        cap_tgt = resolve_capture_target(
+            self.cfg,
+            windows=open_wins,
+            video_devices=vid_devs if rec.capture_scope == "capture_card" else None,
+            win32_ops=self._win32_ops,
+        )
         return {
             "ok": True,
             "recorder": rec.to_dict(),
@@ -1488,7 +1539,33 @@ class WireDeckApi:
             "runtime_status": self._recorder.get_runtime_status(),
             "is_recording": self._recorder.is_recording,
             "active_file": self._recorder.active_file,
+            "capture_target": cap_tgt,
+            "open_windows": open_wins[:40],
+            "video_devices": vid_devs,
             "clips_summary": list_recorded_clips(t_dir),
+        }
+
+    def list_capture_sources(self) -> dict[str, Any]:
+        """Refresh live open desktop windows & DirectShow video capture devices."""
+        if self._preview_state == "recorder":
+            st = self._preview_recorder_state()
+            return {
+                "ok": True,
+                "open_windows": st["open_windows"],
+                "video_devices": st["video_devices"],
+                "capture_target": st["capture_target"],
+            }
+        rec = self.cfg.recorder
+        det = detect_recorders(self.cfg, system_env=collect_system_env_cached())
+        ff_exe = str((det.get("ffmpeg") or {}).get("exe_path") or "")
+        wins = self._win32_ops.list_windows() if self._win32_ops.list_windows else []
+        vdevs = detect_ffmpeg_video_devices(ff_exe) if ff_exe else []
+        tgt = resolve_capture_target(self.cfg, windows=wins, video_devices=vdevs, win32_ops=self._win32_ops)
+        return {
+            "ok": True,
+            "open_windows": wins[:50],
+            "video_devices": vdevs,
+            "capture_target": tgt,
         }
 
     def save_recorder_settings(self, patch: dict[str, Any]) -> dict[str, Any]:
@@ -1547,16 +1624,120 @@ class WireDeckApi:
             return ActionResult(ok=True, code="PREVIEW_ONLY", message="预览模式下已模拟切入下一录像段").to_dict()
         return self._recorder.split_now(self.cfg, self.paths, win32_ops=self._win32_ops).to_dict()
 
+    def recorder_take_screenshot(self) -> dict[str, Any]:
+        if self._preview_state:
+            return ActionResult(
+                ok=True,
+                code="PREVIEW_ONLY",
+                message="预览模式下已模拟保存纯净截图：1_xbox_20261128_143500.png",
+            ).to_dict()
+        return capture_screenshot(self.cfg, win32_ops=self._win32_ops).to_dict()
+
+    def run_link_benchmark(self, transport: str = "") -> dict[str, Any]:
+        t_mode = (transport or self.cfg.active_transport or "wired").strip().lower()
+        if self._preview_state:
+            if t_mode == "wireless":
+                return {
+                    "ok": True,
+                    "target_ip": "192.168.137.42",
+                    "transport": "wireless",
+                    "grade": "A",
+                    "sent": 12,
+                    "received": 12,
+                    "loss_pct": 0.0,
+                    "min_ms": 1.1,
+                    "avg_ms": 2.3,
+                    "max_ms": 4.2,
+                    "jitter_ms": 0.9,
+                    "recommended_bitrate": "25–40 Mbps / 60Hz 流畅",
+                    "summary": "无线链路稳定：抖动 < 1ms，零丢包，可流畅 60Hz 高码率串流。",
+                }
+            return {
+                "ok": True,
+                "target_ip": self.cfg.peer_ip,
+                "transport": "wired",
+                "grade": "S",
+                "sent": 12,
+                "received": 12,
+                "loss_pct": 0.0,
+                "min_ms": 0.3,
+                "avg_ms": 0.5,
+                "max_ms": 0.9,
+                "jitter_ms": 0.2,
+                "recommended_bitrate": "50+ Mbps / 120Hz 满帧无损",
+                "summary": "极佳电竞级稳态：几乎零抖动零丢包，可拉满高码率与 120Hz 串流。",
+            }
+
+        target_ip = self.cfg.peer_ip
+        if t_mode == "wireless":
+            target_ip = self.cfg.wireless_peer_ip
+            if not target_ip and self._last_wireless_report:
+                target_ip = str((self._last_wireless_report.snapshot.get("connectivity") or {}).get("target_peer_ip") or "")
+        return run_link_benchmark(target_ip, count=12, transport=t_mode)
+
+    def export_config_backup(self) -> dict[str, Any]:
+        if self._preview_state:
+            return {"ok": True, "path": "D:\\Backups\\WireDeck_Backup.json", "plugin_config_count": 2}
+        if self._window is None:
+            out_p = self.paths.exports_dir / f"WireDeck_Backup_{time.strftime('%Y%m%d_%H%M%S')}.json"
+            return export_config_backup(self.paths, out_p, cfg=self.cfg)
+        try:
+            import webview
+
+            save_fn = getattr(webview, "SAVE_DIALOG", 30)
+            picked = self._window.create_file_dialog(
+                save_fn,
+                save_filename=f"WireDeck_Backup_{time.strftime('%Y%m%d')}.json",
+                file_types=("WireDeck Backup (*.json)",),
+            )
+            if not picked:
+                return {"ok": False, "code": "CANCELLED"}
+            chosen = str(picked[0] if isinstance(picked, (list, tuple)) else picked).strip()
+            if not chosen:
+                return {"ok": False, "code": "CANCELLED"}
+            if not chosen.lower().endswith(".json"):
+                chosen += ".json"
+            return export_config_backup(self.paths, Path(chosen), cfg=self.cfg)
+        except Exception as exc:
+            return {"ok": False, "code": "BACKUP_EXPORT_FAILED", "message": str(exc)}
+
+    def import_config_backup(self) -> dict[str, Any]:
+        if self._preview_state:
+            return {"ok": True, "restored_plugin_configs": 2, "config": self.cfg.to_dict()}
+        if self._window is None:
+            return {"ok": False, "code": "NO_WINDOW"}
+        try:
+            import webview
+
+            picked = self._window.create_file_dialog(
+                webview.OPEN_DIALOG,
+                allow_multiple=False,
+                file_types=("WireDeck Backup (*.json)", "All files (*.*)"),
+            )
+            if not picked:
+                return {"ok": False, "code": "CANCELLED"}
+            chosen = str(picked[0] if isinstance(picked, (list, tuple)) else picked).strip()
+            if not chosen:
+                return {"ok": False, "code": "CANCELLED"}
+            res = import_config_backup(self.paths, Path(chosen))
+            if res.get("ok"):
+                self.cfg = load_config(self.paths)
+            return res
+        except Exception as exc:
+            return {"ok": False, "code": "BACKUP_IMPORT_FAILED", "message": str(exc)}
+
     def recorder_sync_obs_path(self) -> dict[str, Any]:
         if self._preview_state:
-            return ActionResult(ok=True, code="PREVIEW_ONLY", message="预览模式下已模拟同步 OBS 输出目录与分段").to_dict()
+            return ActionResult(ok=True, code="PREVIEW_ONLY", message="预览模式下已模拟同步 OBS 输出目录、分段与采集源").to_dict()
         rec = self.cfg.recorder
+        tgt = resolve_capture_target(self.cfg, win32_ops=self._win32_ops)
         return sync_obs_output_dir(
             rec.output_dir.strip(),
             paths=self.paths,
             split_mode=rec.split_mode,
             split_minutes=rec.split_minutes,
             split_size_mb=rec.split_size_mb,
+            capture_target=tgt,
         ).to_dict()
 
     def recorder_offload_now(self) -> dict[str, Any]:

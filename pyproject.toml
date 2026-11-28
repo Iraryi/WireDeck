@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "wiredeck"
-version = "0.2.2"
+version = "0.2.3"
 description = "Minimalist Windows laptop-to-console wired direct & 5 GHz wireless streaming assistant with 6-layer fault diagnosis, 4 languages, 5 device presets, and 20 AI/DSH toolkits."
 readme = "README.md"
 license = { file = "LICENSE" }

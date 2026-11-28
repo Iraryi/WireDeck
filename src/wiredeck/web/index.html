@@ -110,7 +110,10 @@
             <button class="btn btn-sm" id="bpFixBtn" type="button" style="display:none"></button>
           </div>
 
-          <div class="sec-label" data-i18n="sec_chain">链路诊断（点击行查看详情）</div>
+          <div class="sec-row">
+            <span class="sec-label" style="margin:0;" data-i18n="sec_chain">链路诊断（点击行查看详情）</span>
+            <button class="btn btn-sm" id="btnHomeBenchmark" type="button" data-i18n="btn_benchmark">测稳定性</button>
+          </div>
           <div class="group-box" id="diagTable"></div>
         </section>
 
@@ -174,7 +177,10 @@
             <button class="btn btn-sm" id="wBpFixBtn" type="button" style="display:none"></button>
           </div>
 
-          <div class="sec-label" data-i18n="w_sec_chain">无线链路诊断（点击行查看详情）</div>
+          <div class="sec-row">
+            <span class="sec-label" style="margin:0;" data-i18n="w_sec_chain">无线链路诊断（点击行查看详情）</span>
+            <button class="btn btn-sm" id="btnWirelessBenchmark" type="button" data-i18n="btn_benchmark">测稳定性</button>
+          </div>
           <div class="group-box" id="wDiagTable"></div>
         </section>
 
@@ -304,6 +310,7 @@
             <div class="ctrl-actions">
               <button class="btn btn-sm btn-primary" id="btnRecToggle" type="button" data-i18n="rec_btn_start">开始录制</button>
               <button class="btn btn-sm" id="btnRecSplitNow" type="button" style="display:none;" data-i18n="rec_btn_split_now">立即切段</button>
+              <button class="btn btn-sm" id="btnRecScreenshot" type="button" data-i18n="rec_btn_screenshot">截图</button>
               <button class="btn btn-sm" id="btnRecReplay" type="button" data-i18n="rec_btn_replay">保存回放</button>
               <button class="btn btn-sm" id="btnRecOpenDir" type="button" data-i18n="rec_btn_open_dir">打开目录</button>
             </div>
@@ -325,6 +332,28 @@
                     <option value="custom" data-i18n="rec_bk_custom">自定义外延录屏程序</option>
                   </select>
                 </div>
+              </div>
+              <div class="setting-row compact rec-scope-row">
+                <span class="setting-label" data-i18n="rec_capture_scope">录制范围（拍什么）</span>
+                <div class="row-actions" style="gap:6px;flex-wrap:wrap;justify-content:flex-end;">
+                  <label class="inline-check" id="recStrictWindowWrap" data-i18n-title="rec_strict_tip" title="目标窗口未开启时不回退拍全屏，防止桌面弹窗/隐私入镜">
+                    <input type="checkbox" id="recStrictWindow" />
+                    <span data-i18n="rec_strict_window">防误录桌面</span>
+                  </label>
+                  <select id="recCaptureScope">
+                    <option value="stream_window" data-i18n="rec_scope_stream">仅录游戏串流窗口（推荐·防弹窗）</option>
+                    <option value="window" data-i18n="rec_scope_window">指定任意程序窗口</option>
+                    <option value="capture_card" data-i18n="rec_scope_card">HDMI / USB 采集卡（后台纯录）</option>
+                    <option value="desktop" data-i18n="rec_scope_desktop">整个电脑屏幕（所见即所得）</option>
+                  </select>
+                  <select id="recWindowSelect" style="display:none;max-width:170px;"></select>
+                  <select id="recVideoDevSelect" style="display:none;max-width:170px;"></select>
+                  <button class="btn btn-sm" id="btnRecRefreshSources" type="button" data-i18n="rec_btn_scan_src">刷新</button>
+                </div>
+              </div>
+              <div class="rec-capture-hint info" id="recCaptureHintBar">
+                <span class="rec-hint-dot"></span>
+                <span id="recCaptureHintText">—</span>
               </div>
               <div class="setting-row compact">
                 <span class="setting-label" data-i18n="rec_mode">工作模式与联动</span>
@@ -570,6 +599,7 @@
               <div class="page-sub" data-i18n="settings_sub">各设备预设的参数相互独立保存，共享本机有线/无线环境</div>
             </div>
             <div class="row-actions">
+              <button class="btn btn-sm" id="btnOpenBackup" type="button" data-i18n="set_backup_btn">备份/恢复</button>
               <button class="btn btn-sm" id="btnOpenUpdates" type="button" data-i18n="set_check_updates">检查更新</button>
               <button class="btn btn-sm btn-primary" id="btnSaveSettings" type="button" data-i18n="btn_save">保存</button>
             </div>
@@ -942,6 +972,21 @@
         <div class="row-actions">
           <button class="btn btn-sm" id="btnUninstCancel" type="button" data-i18n="uninst_btn_cancel">取消卸载</button>
           <button class="btn btn-sm btn-danger" id="btnUninstConfirm" type="button" data-i18n="uninst_btn_confirm">确认并卸载 WireDeck</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Config & Plugin Settings Backup / Restore Modal -->
+  <div class="modal-backdrop" id="backupModal">
+    <div class="modal">
+      <div class="modal-title" data-i18n="backup_modal_title">配置与插件参数备份 / 恢复</div>
+      <div class="modal-body" data-i18n="backup_modal_desc">可将本机预设、网卡 IP、录屏设置与已安装插件参数（plugin_configs）打包为单一 JSON 备份，换电脑或重装后一键恢复。</div>
+      <div class="modal-actions" style="justify-content:space-between;">
+        <button class="btn btn-sm" id="btnBackupClose" type="button" data-i18n="btn_close">关闭</button>
+        <div class="row-actions">
+          <button class="btn btn-sm" id="btnBackupImport" type="button" data-i18n="backup_btn_import">导入备份恢复</button>
+          <button class="btn btn-sm btn-primary" id="btnBackupExport" type="button" data-i18n="backup_btn_export">导出备份 (.json)</button>
         </div>
       </div>
     </div>

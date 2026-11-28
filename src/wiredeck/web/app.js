@@ -2563,6 +2563,84 @@
     await loadRecorderData();
   }
 
+  function updateCaptureScopeControls(rec, openWins, vidDevs, effBk, tgt) {
+    const scopeSel = document.getElementById("recCaptureScope");
+    const winSel = document.getElementById("recWindowSelect");
+    const vidSel = document.getElementById("recVideoDevSelect");
+    const strictWrap = document.getElementById("recStrictWindowWrap");
+    const strictCb = document.getElementById("recStrictWindow");
+    const hintBar = document.getElementById("recCaptureHintBar");
+    const hintTxt = document.getElementById("recCaptureHintText");
+
+    const scope = (scopeSel && scopeSel.value) || (rec && rec.capture_scope) || "stream_window";
+    if (winSel) {
+      const prevTitle = (rec && rec.capture_window_title) || winSel.value || "";
+      const prevExe = (rec && rec.capture_window_exe) || "";
+      winSel.innerHTML = `<option value="">${escapeHtml(t("rec_pick_window_ph"))}</option>`;
+      (openWins || []).forEach((w) => {
+        const opt = document.createElement("option");
+        opt.value = w.title || "";
+        opt.dataset.exe = w.process_name || "";
+        const procTag = w.process_name ? ` [${w.process_name}]` : "";
+        const minTag = w.is_minimized ? ` (${t("rec_win_minimized")})` : "";
+        opt.textContent = `${w.title}${procTag}${minTag}`;
+        if ((prevTitle && w.title === prevTitle) || (!prevTitle && prevExe && w.process_name === prevExe)) {
+          opt.selected = true;
+        }
+        winSel.appendChild(opt);
+      });
+      winSel.style.display = scope === "window" ? "inline-block" : "none";
+    }
+    if (vidSel) {
+      const prevDev = (rec && rec.capture_video_device) || vidSel.value || "";
+      vidSel.innerHTML = `<option value="">${escapeHtml(t("rec_pick_card_auto"))}</option>`;
+      (vidDevs || []).forEach((d) => {
+        const opt = document.createElement("option");
+        opt.value = d.name || "";
+        opt.textContent = d.is_capture_card ? `★ ${d.name}` : d.name;
+        if (prevDev && d.name === prevDev) opt.selected = true;
+        vidSel.appendChild(opt);
+      });
+      vidSel.style.display = scope === "capture_card" ? "inline-block" : "none";
+    }
+    if (strictWrap && strictCb) {
+      strictWrap.style.display = (scope === "stream_window" || scope === "window") ? "inline-flex" : "none";
+    }
+    if (hintBar && hintTxt) {
+      const info = tgt || {};
+      const effScope = info.effective_scope || scope;
+      const targetLabel = info.label || "";
+      let tone = "info";
+      let msg = "";
+      if (effScope === "blocked" || info.ready === false) {
+        tone = "err";
+        msg = info.warning || t("rec_hint_blocked");
+      } else if (effScope === "capture_card") {
+        tone = "ok";
+        msg = t("rec_hint_card_ok").replace("{dev}", targetLabel || "Capture Card");
+      } else if (effScope === "window") {
+        if (effBk === "obs") {
+          tone = info.is_minimized ? "warn" : "ok";
+          msg = (info.is_minimized ? t("rec_hint_win_min") : t("rec_hint_obs_wgc")).replace("{win}", targetLabel);
+        } else if (effBk === "ffmpeg") {
+          tone = info.is_minimized ? "warn" : "ok";
+          msg = (info.is_minimized ? t("rec_hint_win_min") : t("rec_hint_ff_win")).replace("{win}", targetLabel);
+        } else {
+          tone = "info";
+          msg = t("rec_hint_focus_win").replace("{win}", targetLabel);
+        }
+      } else if (info.fell_back_to_desktop) {
+        tone = "warn";
+        msg = info.warning || t("rec_hint_fallback_desktop");
+      } else {
+        tone = "info";
+        msg = t("rec_hint_desktop");
+      }
+      hintBar.className = `rec-capture-hint ${tone}`;
+      hintTxt.textContent = msg;
+    }
+  }
+
   function renderRecorderView() {
     const rs = state.recorderState;
     const ctrlPane = document.getElementById("recControlPane");
@@ -2625,6 +2703,11 @@
     if (bkBadge) bkBadge.textContent = (det.effective_backend || "auto").toUpperCase();
     const bkSel = document.getElementById("recBackendSelect");
     if (bkSel) bkSel.value = rec.backend || "auto";
+    const scopeSel = document.getElementById("recCaptureScope");
+    if (scopeSel) scopeSel.value = rec.capture_scope || "stream_window";
+    const strictCb = document.getElementById("recStrictWindow");
+    if (strictCb) strictCb.checked = Boolean(rec.strict_window_only);
+    updateCaptureScopeControls(rec, rs.open_windows || [], rs.video_devices || [], det.effective_backend || rec.backend || "auto", rs.capture_target || {});
     document.getElementById("recModeSelect").value = rec.mode || "replay";
     document.getElementById("recAutoLink").checked = Boolean(rec.auto_link_quick_play);
     document.getElementById("recSplitMode").value = rec.split_mode || "off";
@@ -2809,8 +2892,15 @@
   }
 
   function collectRecorderSettingsPatch() {
+    const winSel = document.getElementById("recWindowSelect");
+    const selOpt = winSel && winSel.selectedIndex >= 0 ? winSel.options[winSel.selectedIndex] : null;
     return {
       backend: document.getElementById("recBackendSelect").value,
+      capture_scope: (document.getElementById("recCaptureScope") || {}).value || "stream_window",
+      capture_window_title: winSel ? winSel.value.trim() : "",
+      capture_window_exe: (selOpt && selOpt.dataset && selOpt.dataset.exe) ? selOpt.dataset.exe.trim() : "",
+      capture_video_device: (document.getElementById("recVideoDevSelect") || {}).value || "",
+      strict_window_only: Boolean(document.getElementById("recStrictWindow") && document.getElementById("recStrictWindow").checked),
       mode: document.getElementById("recModeSelect").value,
       auto_link_quick_play: Boolean(document.getElementById("recAutoLink").checked),
       split_mode: document.getElementById("recSplitMode").value,
@@ -3409,6 +3499,43 @@
     document.getElementById("btnRecTabClips").addEventListener("click", async () => { state.recorderTab = "clips"; await loadRecorderData(); });
     document.getElementById("btnRecRefresh").addEventListener("click", async () => { await loadRecorderData(); showToast(t("toast_refreshed")); });
     document.getElementById("recBackendSelect").addEventListener("change", (e) => { toggleRecBackendRows(e.target.value); autoSaveRecorderSettings({}, false); });
+    const capScopeEl = document.getElementById("recCaptureScope");
+    if (capScopeEl) capScopeEl.addEventListener("change", () => autoSaveRecorderSettings({}, false));
+    const strictEl = document.getElementById("recStrictWindow");
+    if (strictEl) strictEl.addEventListener("change", () => autoSaveRecorderSettings({}, false));
+    const winSelEl = document.getElementById("recWindowSelect");
+    if (winSelEl) winSelEl.addEventListener("change", () => autoSaveRecorderSettings({}, false));
+    const vidSelEl = document.getElementById("recVideoDevSelect");
+    if (vidSelEl) vidSelEl.addEventListener("change", () => autoSaveRecorderSettings({}, false));
+    const refSrcBtn = document.getElementById("btnRecRefreshSources");
+    if (refSrcBtn) {
+      refSrcBtn.addEventListener("click", async () => {
+        const api = getApi();
+        if (!api || !api.list_capture_sources) return;
+        const fresh = await api.list_capture_sources();
+        if (fresh && fresh.ok && state.recorderState) {
+          state.recorderState.open_windows = fresh.open_windows || [];
+          state.recorderState.video_devices = fresh.video_devices || [];
+          state.recorderState.capture_target = fresh.capture_target || {};
+          renderRecorderView();
+          showToast(t("toast_refreshed"));
+        }
+      });
+    }
+    const shotBtn = document.getElementById("btnRecScreenshot");
+    if (shotBtn) {
+      shotBtn.addEventListener("click", async () => {
+        const api = getApi();
+        if (!api || !api.recorder_take_screenshot) return;
+        shotBtn.disabled = true;
+        try {
+          const res = await api.recorder_take_screenshot();
+          showToast((res && res.message) || "OK");
+        } finally {
+          shotBtn.disabled = false;
+        }
+      });
+    }
     document.getElementById("recModeSelect").addEventListener("change", () => autoSaveRecorderSettings({}, false));
     document.getElementById("recAutoLink").addEventListener("change", () => autoSaveRecorderSettings({}, false));
     document.getElementById("recSplitMode").addEventListener("change", () => { updateSplitRowVisibility(); autoSaveRecorderSettings({}, false); });
@@ -3802,6 +3929,65 @@
     // Update Center events
     document.getElementById("versionLabel").addEventListener("click", () => openUpdateModal(true));
     document.getElementById("btnOpenUpdates").addEventListener("click", () => openUpdateModal(true));
+
+    // Link Stability Benchmark events
+    const runBenchmarkFor = async (tMode) => {
+      const api = getApi();
+      if (!api || !api.run_link_benchmark) return;
+      showToast(t("bench_running"));
+      const bm = await api.run_link_benchmark(tMode);
+      if (!bm) return;
+      const lines = [
+        `${t("bench_grade")}: ${bm.grade || "-"} (${bm.transport || tMode} -> ${bm.target_ip || "-"})`,
+        `${t("bench_avg")}: ${bm.avg_ms != null ? bm.avg_ms + " ms" : "-"}  |  Min/Max: ${bm.min_ms != null ? bm.min_ms : "-"}/${bm.max_ms != null ? bm.max_ms : "-"} ms`,
+        `${t("bench_jitter")}: ${bm.jitter_ms != null ? bm.jitter_ms + " ms" : "-"}  |  ${t("bench_loss")}: ${bm.loss_pct != null ? bm.loss_pct + "%" : "-"} (${bm.received || 0}/${bm.sent || 12})`,
+        `${t("bench_rec_bitrate")}: ${bm.recommended_bitrate || "-"}`,
+        "",
+        bm.summary || "",
+      ];
+      openTextModal(t("bench_modal_title"), lines.join("\n"));
+    };
+    const hbBtn = document.getElementById("btnHomeBenchmark");
+    if (hbBtn) hbBtn.addEventListener("click", () => runBenchmarkFor("wired"));
+    const wbBtn = document.getElementById("btnWirelessBenchmark");
+    if (wbBtn) wbBtn.addEventListener("click", () => runBenchmarkFor("wireless"));
+
+    // Config & Plugin Backup / Restore events
+    const bkBtn = document.getElementById("btnOpenBackup");
+    if (bkBtn) bkBtn.addEventListener("click", () => document.getElementById("backupModal").classList.add("open"));
+    const bkClose = document.getElementById("btnBackupClose");
+    if (bkClose) bkClose.addEventListener("click", () => document.getElementById("backupModal").classList.remove("open"));
+    const bkExp = document.getElementById("btnBackupExport");
+    if (bkExp) {
+      bkExp.addEventListener("click", async () => {
+        const api = getApi();
+        if (!api || !api.export_config_backup) return;
+        const r = await api.export_config_backup();
+        if (r && r.ok) {
+          showToast(t("backup_exported").replace("{n}", String(r.plugin_config_count || 0)));
+          document.getElementById("backupModal").classList.remove("open");
+        } else if (r && r.code !== "CANCELLED") {
+          showToast((r && r.message) || "Export failed");
+        }
+      });
+    }
+    const bkImp = document.getElementById("btnBackupImport");
+    if (bkImp) {
+      bkImp.addEventListener("click", async () => {
+        const api = getApi();
+        if (!api || !api.import_config_backup) return;
+        const r = await api.import_config_backup();
+        if (r && r.ok) {
+          showToast(t("backup_imported").replace("{n}", String(r.restored_plugin_configs || 0)));
+          document.getElementById("backupModal").classList.remove("open");
+          state.wiredStale = true;
+          state.wirelessStale = true;
+          await refreshAll(true);
+        } else if (r && r.code !== "CANCELLED") {
+          showToast((r && r.message) || "Import failed");
+        }
+      });
+    }
     document.getElementById("btnUpdClose").addEventListener("click", () => {
       document.getElementById("updateModal").classList.remove("open");
     });

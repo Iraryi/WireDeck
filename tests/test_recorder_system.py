@@ -21,6 +21,7 @@ from wiredeck.recorder import (
     cleanup_stale_part_files,
     delete_clip_file,
     detect_ffmpeg_audio_devices,
+    detect_ffmpeg_video_devices,
     detect_obs_info,
     get_next_sequence_index,
     inspect_target_path,
@@ -31,7 +32,9 @@ from wiredeck.recorder import (
     prune_clips_by_quota,
     rename_clip_with_forced_seq,
     render_clip_filename,
+    resolve_capture_target,
     resolve_effective_split_policy,
+    sync_obs_capture_source,
     sync_obs_output_dir,
 )
 from wiredeck.version import NAT_NAME
@@ -672,3 +675,143 @@ def test_part_cleanup_ffmpeg_audio_split_now_and_mid_session_guards(tmp_path: Pa
     ctrl_roll.stop_recording(cfg_roll, paths, win32_ops=hk_ops)
     assert not seg1_nv.exists()
     assert len(list(usb_roll.glob("1_*.mp4"))) == 1
+
+
+def test_humane_capture_scopes_obs_wgc_sync_and_wake_focus(tmp_path: Path):
+    from types import SimpleNamespace
+
+    # 1. Video capture card detection parses both modern and legacy formats
+    dshow_out = (
+        '[dshow @ 00] "USB3.0 HD Video Capture" (video)\n'
+        '[dshow @ 00] "Integrated Webcam" (video)\n'
+        '[dshow @ 00] "Microphone Array" (audio)\n'
+    )
+    devs = detect_ffmpeg_video_devices(
+        "ffmpeg.exe",
+        runner=lambda cmd: SimpleNamespace(returncode=0, stdout="", stderr=dshow_out),
+    )
+    assert len(devs) == 2
+    assert devs[0]["name"] == "USB3.0 HD Video Capture" and devs[0]["is_capture_card"] is True
+    assert devs[1]["name"] == "Integrated Webcam" and devs[1]["is_capture_card"] is False
+
+    # 2. Target resolution: stream_window match, fallback, and strict privacy guard
+    wins = [
+        {"hwnd": 777, "title": "XStreaming", "process_name": "XStreaming.exe", "class_name": "Chrome_WidgetWin_1", "is_minimized": True},
+        {"hwnd": 888, "title": "WeChat", "process_name": "WeChat.exe", "class_name": "WeChatMainWnd", "is_minimized": False},
+    ]
+    cfg_stream = AppConfig(active_preset="xbox", recorder=RecorderSettings(capture_scope="stream_window"))
+    tgt_stream = resolve_capture_target(cfg_stream, windows=wins)
+    assert tgt_stream["effective_scope"] == "window"
+    assert tgt_stream["hwnd"] == 777
+    assert tgt_stream["is_minimized"] is True
+
+    # Closed stream window -> falls back unless strict_window_only=True
+    tgt_fb = resolve_capture_target(cfg_stream, windows=[wins[1]])
+    assert tgt_fb["effective_scope"] == "desktop" and tgt_fb["fell_back_to_desktop"] is True
+    cfg_strict = AppConfig(active_preset="xbox", recorder=RecorderSettings(capture_scope="stream_window", strict_window_only=True))
+    tgt_blk = resolve_capture_target(cfg_strict, windows=[wins[1]])
+    assert tgt_blk["effective_scope"] == "blocked" and tgt_blk["ready"] is False
+
+    # Capture card target resolves cleanly and builds headless dshow command
+    cfg_card = AppConfig(recorder=RecorderSettings(capture_scope="capture_card"))
+    tgt_card = resolve_capture_target(cfg_card, video_devices=devs)
+    assert tgt_card["effective_scope"] == "capture_card"
+    assert tgt_card["video_device"] == "USB3.0 HD Video Capture"
+    cmd_card = build_ffmpeg_command(
+        "ffmpeg.exe",
+        tmp_path / "card.mkv",
+        capture_scope="capture_card",
+        video_device=tgt_card["video_device"],
+    )
+    assert "video=USB3.0 HD Video Capture" in cmd_card and "desktop" not in cmd_card
+
+    # Targeted window FFmpeg command sets title= + even-dimension pad filter
+    cmd_win = build_ffmpeg_command(
+        "ffmpeg.exe",
+        tmp_path / "win.mkv",
+        capture_scope="window",
+        window_title="XStreaming",
+    )
+    assert "title=XStreaming" in cmd_win
+    assert "pad=ceil(iw/2)*2:ceil(ih/2)*2" in cmd_win
+
+    # 3. OBS WGC source sync creates WireDeck Capture without deleting user's existing sources
+    paths = resolve_app_paths(tmp_path / "app", local_appdata=tmp_path / "la")
+    appdata = tmp_path / "AppData"
+    scenes_dir = appdata / "obs-studio" / "basic" / "scenes"
+    scenes_dir.mkdir(parents=True)
+    (appdata / "obs-studio" / "global.ini").write_text("[Basic]\nSceneCollectionFile=Untitles\n", encoding="utf-8")
+    scene_json = scenes_dir / "Untitles.json"
+    scene_json.write_text(
+        json.dumps(
+            {
+                "current_scene": "Main",
+                "sources": [
+                    {"name": "UserMic", "id": "wasapi_input_capture", "settings": {}},
+                    {"name": "Main", "id": "scene", "settings": {"items": [{"name": "UserMic", "visible": True}]}},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    sc_res = sync_obs_capture_source(tgt_stream, paths=paths, appdata_dir=appdata)
+    assert sc_res["synced"] is True and sc_res["source_id"] == "window_capture"
+    assert (paths.runtime_dir / "obs_scene_backup.json").is_file()
+    saved_scene = json.loads(scene_json.read_text(encoding="utf-8"))
+    src_names = [s["name"] for s in saved_scene["sources"]]
+    assert "UserMic" in src_names and "WireDeck Capture" in src_names
+    wd_src = next(s for s in saved_scene["sources"] if s["name"] == "WireDeck Capture")
+    assert wd_src["settings"]["method"] == 2  # WGC background-occlusion capture
+    assert "XStreaming.exe" in wd_src["settings"]["window"]
+
+    # 4. Controller wakes minimized window non-intrusively for FFmpeg & focuses window for NVIDIA hotkey
+    woken: list[int] = []
+    focused: list[int] = []
+    sent_hk: list[str] = []
+    ff_fake = tmp_path / "ffmpeg.exe"
+    ff_fake.write_bytes(b"MZ")
+
+    class _DummyProc:
+        def poll(self):
+            return None
+
+    ops_rec = Win32Ops(
+        list_windows=lambda: wins,
+        restore_window_no_activate=lambda h: woken.append(h) or True,
+        focus_window=lambda h: focused.append(h) or True,
+        send_hotkey=lambda k: sent_hk.append(k) or True,
+        sleep=lambda _s: None,
+    )
+    cfg_ff_win = AppConfig(
+        active_preset="xbox",
+        recorder=RecorderSettings(
+            backend="ffmpeg",
+            capture_scope="stream_window",
+            output_dir=str(tmp_path / "out_ff"),
+            ffmpeg_exe_path=str(ff_fake),
+        ),
+    )
+    ctrl_ff = RecorderController(popen_fn=lambda cmd, **_kw: _DummyProc())
+    r_ff = ctrl_ff.start_recording(cfg_ff_win, paths, win32_ops=ops_rec)
+    assert r_ff.ok and woken == [777]
+    assert ctrl_ff.get_runtime_status()["capture_target_label"] == "XStreaming"
+    ctrl_ff.stop_recording(cfg_ff_win, paths, win32_ops=ops_rec)
+
+    cfg_nv_win = AppConfig(
+        active_preset="xbox",
+        recorder=RecorderSettings(backend="nvidia", mode="auto_record", capture_scope="stream_window"),
+    )
+    ctrl_nv = RecorderController()
+    r_nv = ctrl_nv.start_recording(cfg_nv_win, paths, system_env={"primary_nvidia_gpu": {"name": "RTX 5070"}}, win32_ops=ops_rec)
+    assert r_nv.ok and focused == [777] and sent_hk == ["Alt+F9"]
+    ctrl_nv.stop_recording(cfg_nv_win, paths, win32_ops=ops_rec)
+
+    # Strict guard rejects recording if target window is missing
+    ops_empty = Win32Ops(list_windows=lambda: [wins[1]], sleep=lambda _s: None)
+    r_blk = ctrl_nv.start_recording(
+        AppConfig(recorder=RecorderSettings(backend="nvidia", capture_scope="stream_window", strict_window_only=True)),
+        paths,
+        system_env={"primary_nvidia_gpu": {"name": "RTX 5070"}},
+        win32_ops=ops_empty,
+    )
+    assert r_blk.ok is False and r_blk.code == "CAPTURE_TARGET_MISSING"

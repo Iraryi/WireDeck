@@ -12,8 +12,8 @@ from pathlib import Path
 from typing import Any
 
 from wiredeck.actions import SUPPORTED_ACTIONS, execute_action
-from wiredeck.config import AppConfig, load_config
-from wiredeck.diagnostics import classify_snapshot, run_diagnosis
+from wiredeck.config import AppConfig, export_config_backup, import_config_backup, load_config
+from wiredeck.diagnostics import classify_snapshot, run_diagnosis, run_link_benchmark
 from wiredeck.exporter import export_diagnostic_bundle
 from wiredeck.extensions import (
     discover_extensions,
@@ -36,6 +36,7 @@ from wiredeck.plugins import (
     uninstall_plugin,
 )
 from wiredeck.recorder import (
+    capture_screenshot,
     detect_recorders,
     inspect_target_path,
     list_recorded_clips,
@@ -43,6 +44,7 @@ from wiredeck.recorder import (
     offload_clips_to_target,
     preview_clip_filenames,
     prune_clips_by_quota,
+    resolve_capture_target,
     resolve_effective_split_policy,
 )
 from wiredeck.presets import ALL_PRESET_IDS, PRESET_ALIASES, normalize_preset_id
@@ -279,10 +281,26 @@ def _build_parser() -> argparse.ArgumentParser:
         ("clips", "List recorded video clips in target output directory"),
         ("offload", "Offload local captures to target output directory with SHA-256 verification"),
         ("prune", "Prune oldest clips in target directory according to storage quota"),
+        ("screenshot", "Capture clean PNG screenshot honoring configured capture scope"),
     ):
         sub_p = rec_sub.add_parser(cmd_name, help=help_txt)
         sub_p.add_argument("--dir", dest="rec_dir", default="", help="Optional target output folder override")
         sub_p.add_argument("--json", action="store_true", dest="as_json")
+
+    p_bench = sub.add_parser("benchmark", help="Run 12-packet RTT/jitter/loss link benchmark & bitrate grading")
+    p_bench.add_argument("--transport", choices=["wired", "wireless"], default=None)
+    p_bench.add_argument("--ip", default="")
+    p_bench.add_argument("--count", type=int, default=12)
+    p_bench.add_argument("--json", action="store_true", dest="as_json")
+
+    p_cfg_bk = sub.add_parser("config", help="Export or import WireDeck config and plugin settings backup")
+    cfg_sub = p_cfg_bk.add_subparsers(dest="cfg_cmd")
+    p_cfg_exp = cfg_sub.add_parser("export", help="Export portable wiredeck-backup/v1 JSON")
+    p_cfg_exp.add_argument("out_file")
+    p_cfg_exp.add_argument("--json", action="store_true", dest="as_json")
+    p_cfg_imp = cfg_sub.add_parser("import", help="Restore config & plugin_configs from wiredeck-backup/v1 JSON")
+    p_cfg_imp.add_argument("in_file")
+    p_cfg_imp.add_argument("--json", action="store_true", dest="as_json")
 
     p_doc = sub.add_parser("doctor", help="Run whole-system readiness & health check across power, GPU, storage, and plugins")
     p_doc.add_argument("--json", action="store_true", dest="as_json")
@@ -567,6 +585,7 @@ def main(argv: list[str] | None = None) -> int:
                 "recorder": cfg.recorder.to_dict(),
                 "detected": det,
                 "target": tgt,
+                "capture_target": resolve_capture_target(cfg),
                 "effective_split": resolve_effective_split_policy(
                     cfg.recorder.split_mode,
                     cfg.recorder.split_minutes,
@@ -621,6 +640,10 @@ def main(argv: list[str] | None = None) -> int:
                 _emit(out.to_dict(), args.as_json, out.message)
                 return 1
             out = prune_clips_by_quota(Path(target_dir), max_storage_gb=cfg.recorder.max_storage_gb, min_free_gb=cfg.recorder.min_free_gb)
+            _emit(out.to_dict(), args.as_json, f"[{out.code}] {out.message}")
+            return out.exit_code
+        if args.rec_cmd == "screenshot":
+            out = capture_screenshot(cfg, output_dir=target_dir)
             _emit(out.to_dict(), args.as_json, f"[{out.code}] {out.message}")
             return out.exit_code
         parser.parse_args(["recorder", "--help"])
@@ -764,6 +787,26 @@ def main(argv: list[str] | None = None) -> int:
         for app_e in scan.get("associated_apps") or []:
             lines.append(f"  - [{app_e.get('category')}] {app_e.get('name')} ({app_e.get('version') or '-'}) default_selected={app_e.get('default_selected')}")
         _emit(scan, args.as_json, "\n".join(lines))
+        return 0
+
+    if args.command == "benchmark":
+        t_mode = args.transport or cfg.active_transport
+        ip_tgt = (args.ip or "").strip() or (cfg.wireless_peer_ip if t_mode == "wireless" else cfg.peer_ip)
+        bm = run_link_benchmark(ip_tgt, count=args.count, transport=t_mode)
+        txt = f"[{bm.get('grade', '-')}] {bm.get('target_ip')} avg={bm.get('avg_ms')}ms jitter={bm.get('jitter_ms')}ms loss={bm.get('loss_pct')}% | {bm.get('recommended_bitrate')}"
+        _emit(bm, args.as_json, txt)
+        return 0 if bm.get("ok") else 1
+
+    if args.command == "config":
+        if args.cfg_cmd == "export":
+            res_ex = export_config_backup(paths, Path(args.out_file), cfg=cfg)
+            _emit(res_ex, args.as_json, f"Exported backup to {res_ex.get('path')} ({res_ex.get('plugin_config_count')} plugin configs)")
+            return 0 if res_ex.get("ok") else 1
+        if args.cfg_cmd == "import":
+            res_im = import_config_backup(paths, Path(args.in_file))
+            _emit(res_im, args.as_json, json.dumps(res_im, ensure_ascii=False, indent=2))
+            return 0 if res_im.get("ok") else 1
+        parser.parse_args(["config", "--help"])
         return 0
 
     return 1

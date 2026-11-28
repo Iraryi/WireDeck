@@ -5,14 +5,20 @@ from __future__ import annotations
 import ipaddress
 import json
 import os
+import re
 import shutil
 import tempfile
 from dataclasses import asdict, dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
-from wiredeck.paths import AppPaths
+from wiredeck.paths import AppPaths, ensure_within
 from wiredeck.presets import ALL_PRESET_IDS, get_preset, normalize_preset_id
+from wiredeck.version import APP_VERSION
+
+BACKUP_SCHEMA_VERSION = "wiredeck-backup/v1"
+_VALID_BACKUP_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 
 VALID_PROFILES = ALL_PRESET_IDS
 VALID_LANGUAGES = ("zh-CN", "zh-TW", "en", "ja")
@@ -25,6 +31,7 @@ VALID_RECORDER_MODES = ("manual", "replay", "auto_record")
 VALID_FFMPEG_FORMATS = ("mkv", "mp4", "mov", "ts", "flv")
 VALID_FFMPEG_ENCODERS = ("auto", "av1_nvenc", "hevc_nvenc", "h264_nvenc", "libx264")
 VALID_SPLIT_MODES = ("off", "time", "size", "both")
+VALID_CAPTURE_SCOPES = ("stream_window", "window", "capture_card", "desktop")
 VALID_UPDATE_CHANNELS = ("stable", "beta")
 DEFAULT_FILENAME_TEMPLATE = "{preset}_{date}_{time}"
 
@@ -56,6 +63,11 @@ class RecorderSettings:
     filename_template: str = DEFAULT_FILENAME_TEMPLATE
     apply_naming_on_offload: bool = True
     ffmpeg_audio_device: str = ""
+    capture_scope: str = "stream_window"
+    capture_window_title: str = ""
+    capture_window_exe: str = ""
+    capture_video_device: str = ""
+    strict_window_only: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -111,6 +123,9 @@ def normalize_recorder_settings(raw: Any) -> RecorderSettings:
     raw_tpl = _s("filename_template")[:96]
     if not raw_tpl:
         raw_tpl = DEFAULT_FILENAME_TEMPLATE
+    scope = str(raw.get("capture_scope", "stream_window")).strip().lower()
+    if scope not in VALID_CAPTURE_SCOPES:
+        scope = "stream_window"
 
     return RecorderSettings(
         backend=backend,
@@ -138,6 +153,11 @@ def normalize_recorder_settings(raw: Any) -> RecorderSettings:
         filename_template=raw_tpl,
         apply_naming_on_offload=bool(raw.get("apply_naming_on_offload", True)),
         ffmpeg_audio_device=_s("ffmpeg_audio_device")[:120],
+        capture_scope=scope,
+        capture_window_title=_s("capture_window_title")[:180],
+        capture_window_exe=_s("capture_window_exe")[:120],
+        capture_video_device=_s("capture_video_device")[:180],
+        strict_window_only=bool(raw.get("strict_window_only", False)),
     )
 
 
@@ -582,3 +602,100 @@ def save_config(paths: AppPaths, cfg: AppConfig) -> None:
         except OSError:
             pass
         raise
+
+
+def _atomic_write_json_file(target: Path, payload: dict[str, Any]) -> None:
+    target.parent.mkdir(parents=True, exist_ok=True)
+    content = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
+    fd, tmp_name = tempfile.mkstemp(prefix=".wd_bak_", suffix=".tmp", dir=str(target.parent))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write(content)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp_name, target)
+    except Exception:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
+
+
+def export_config_backup(
+    paths: AppPaths,
+    out_file: Path,
+    *,
+    cfg: AppConfig | None = None,
+) -> dict[str, Any]:
+    """Export WireDeck config.json and all plugin_configs/*.json into a portable backup file."""
+    active_cfg = cfg if cfg is not None else load_config(paths)
+    plugin_configs: dict[str, Any] = {}
+    if paths.plugin_configs_dir.is_dir():
+        for jf in sorted(paths.plugin_configs_dir.glob("*.json"), key=lambda p: p.name.lower()):
+            if not _VALID_BACKUP_ID_RE.match(jf.stem):
+                continue
+            try:
+                parsed = json.loads(jf.read_text(encoding="utf-8-sig"))
+                if isinstance(parsed, dict):
+                    plugin_configs[jf.stem] = parsed
+            except Exception:
+                continue
+
+    payload = {
+        "schema": BACKUP_SCHEMA_VERSION,
+        "app_version": APP_VERSION,
+        "exported_at": datetime.now(timezone.utc).isoformat(),
+        "config": active_cfg.to_dict(),
+        "plugin_configs": plugin_configs,
+    }
+    target = Path(out_file)
+    _atomic_write_json_file(target, payload)
+    return {
+        "ok": True,
+        "path": str(target),
+        "plugin_config_count": len(plugin_configs),
+    }
+
+
+def import_config_backup(paths: AppPaths, in_file: Path) -> dict[str, Any]:
+    """Restore WireDeck config & plugin_configs from a `wiredeck-backup/v1` JSON file safely."""
+    src = Path(in_file)
+    if not src.is_file():
+        return {"ok": False, "code": "BACKUP_NOT_FOUND", "message": "找不到指定的备份文件"}
+    try:
+        raw = json.loads(src.read_text(encoding="utf-8-sig"))
+    except Exception as exc:
+        return {"ok": False, "code": "BACKUP_INVALID_JSON", "message": f"备份文件 JSON 解析失败：{exc}"}
+
+    if not isinstance(raw, dict) or raw.get("schema") != BACKUP_SCHEMA_VERSION or not isinstance(raw.get("config"), dict):
+        return {"ok": False, "code": "BACKUP_BAD_SCHEMA", "message": "不支持的备份文件格式（需要 wiredeck-backup/v1）"}
+
+    paths.data_dir.mkdir(parents=True, exist_ok=True)
+    if paths.config_file.is_file():
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        try:
+            shutil.copy2(paths.config_file, paths.data_dir / f"config.json.pre_import.{stamp}")
+        except OSError:
+            pass
+
+    new_cfg = _normalize_config(raw["config"])
+    save_config(paths, new_cfg)
+
+    restored_plg = 0
+    raw_plgs = raw.get("plugin_configs")
+    if isinstance(raw_plgs, dict):
+        paths.plugin_configs_dir.mkdir(parents=True, exist_ok=True)
+        for pid, pdata in raw_plgs.items():
+            pid_s = str(pid or "").strip()
+            if not _VALID_BACKUP_ID_RE.match(pid_s) or not isinstance(pdata, dict):
+                continue
+            dest = ensure_within(paths.plugin_configs_dir, paths.plugin_configs_dir / f"{pid_s}.json")
+            _atomic_write_json_file(dest, pdata)
+            restored_plg += 1
+
+    return {
+        "ok": True,
+        "config": new_cfg.to_dict(),
+        "restored_plugin_configs": restored_plg,
+    }

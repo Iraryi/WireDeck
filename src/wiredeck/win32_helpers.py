@@ -21,6 +21,7 @@ from wiredeck.version import APP_VERSION
 
 _KEYEVENTF_KEYUP = 0x0002
 _STARTF_USESHOWWINDOW = 0x00000001
+_SW_SHOWNOACTIVATE = 4
 _SW_SHOWMINNOACTIVE = 7
 _SW_RESTORE = 9
 _PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
@@ -269,6 +270,91 @@ def focus_window(hwnd: int) -> bool:
             if attached:
                 user32.AttachThreadInput(fg_tid, cur_tid, False)
         return ok
+    except Exception:
+        return False
+
+
+_EXCLUDED_WINDOW_CLASSES: frozenset[str] = frozenset(
+    {
+        "progman",
+        "workerw",
+        "shell_traywnd",
+        "shell_secondarytraywnd",
+        "windows.ui.core.corewindow",
+        "applicationframewindow",
+    }
+)
+
+
+def list_open_windows(*, exclude_processes: set[str] | None = None) -> list[dict[str, Any]]:
+    """Enumerate visible user desktop windows with process, class, size, and minimized state."""
+    if os.name != "nt":
+        return []
+    user32 = ctypes.windll.user32
+    excluded = {"wiredeck.exe", *{str(p).strip().lower() for p in (exclude_processes or set())}}
+    results: list[dict[str, Any]] = []
+    WNDENUMPROC = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+
+    def _callback(hwnd: int, _lparam: int) -> bool:
+        if not user32.IsWindowVisible(hwnd):
+            return True
+        length = user32.GetWindowTextLengthW(hwnd)
+        if length <= 0:
+            return True
+        t_buf = ctypes.create_unicode_buffer(length + 1)
+        user32.GetWindowTextW(hwnd, t_buf, length + 1)
+        title = t_buf.value.strip()
+        if not title:
+            return True
+
+        c_buf = ctypes.create_unicode_buffer(256)
+        user32.GetClassNameW(hwnd, c_buf, 256)
+        cls_name = c_buf.value.strip()
+        if cls_name.lower() in _EXCLUDED_WINDOW_CLASSES:
+            return True
+
+        win_pid = wintypes.DWORD(0)
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(win_pid))
+        proc_name = _query_process_image_name(int(win_pid.value))
+        if proc_name in excluded:
+            return True
+
+        rect = wintypes.RECT()
+        user32.GetWindowRect(hwnd, ctypes.byref(rect))
+        width = max(0, int(rect.right - rect.left))
+        height = max(0, int(rect.bottom - rect.top))
+        minimized = bool(user32.IsIconic(hwnd))
+        if not minimized and (width < 80 or height < 50):
+            return True
+
+        results.append(
+            {
+                "hwnd": int(hwnd),
+                "pid": int(win_pid.value),
+                "title": title,
+                "process_name": proc_name,
+                "class_name": cls_name,
+                "is_minimized": minimized,
+                "width": width,
+                "height": height,
+            }
+        )
+        return True
+
+    cb = WNDENUMPROC(_callback)
+    user32.EnumWindows(cb, 0)
+    return results
+
+
+def restore_window_no_activate(hwnd: int) -> bool:
+    """Restore a minimized window without stealing foreground focus so capture frames resume."""
+    if os.name != "nt" or not hwnd:
+        return False
+    user32 = ctypes.windll.user32
+    try:
+        if user32.IsIconic(hwnd):
+            return bool(user32.ShowWindow(hwnd, _SW_SHOWNOACTIVATE))
+        return True
     except Exception:
         return False
 
@@ -561,6 +647,8 @@ class Win32Ops:
     find_window: Callable[..., int] = find_window_by_pid_or_name
     wait_window: Callable[..., int] = wait_for_window
     focus_window: Callable[[int], bool] = focus_window
+    list_windows: Callable[..., list[dict[str, Any]]] = list_open_windows
+    restore_window_no_activate: Callable[[int], bool] = restore_window_no_activate
     is_process_running: Callable[[str], bool] = is_process_running
     wait_for_pid_exit: Callable[..., bool] = wait_for_pid_exit
     launch_process: Callable[..., int] = launch_detached_process

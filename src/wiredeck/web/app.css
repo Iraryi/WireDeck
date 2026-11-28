@@ -1681,6 +1681,37 @@ details.adv-box[open] > summary::after {
   border-color: var(--infobar-warn-border);
   color: var(--warn);
 }
+.rec-capture-hint {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 13px;
+  border-bottom: 1px solid var(--divider);
+  background: var(--surface-subtle);
+  font-size: 11.5px;
+  color: var(--text-sec);
+  line-height: 1.35;
+}
+.rec-hint-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  flex-shrink: 0;
+}
+.rec-capture-hint.ok .rec-hint-dot {
+  background: var(--ok);
+}
+.rec-capture-hint.warn {
+  background: var(--infobar-warn-bg);
+  color: var(--text);
+}
+.rec-capture-hint.warn .rec-hint-dot {
+  background: var(--warn);
+}
+.rec-capture-hint.err .rec-hint-dot {
+  background: var(--danger);
+}
 .sb-link.sb-health-warn {
   color: var(--warn);
   font-weight: 600;

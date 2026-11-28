@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ipaddress
 import re
 from datetime import datetime
 from pathlib import Path
@@ -820,3 +821,119 @@ def run_diagnosis(
         except ImportError:
             ext_results = []
     return classify_snapshot(snapshot, cfg, ext_results=ext_results)
+
+
+def evaluate_link_benchmark(
+    target_ip: str,
+    rtts_ms: list[float | None],
+    *,
+    transport: str = "wired",
+    band: str = "",
+) -> dict[str, Any]:
+    """Score multi-sample ICMP RTT, jitter, and packet loss into an actionable streaming grade."""
+    sent = len(rtts_ms)
+    valid = [float(x) for x in rtts_ms if isinstance(x, (int, float)) and float(x) >= 0]
+    received = len(valid)
+    loss_pct = round(((sent - received) / sent) * 100.0, 1) if sent > 0 else 100.0
+
+    if received == 0:
+        return {
+            "ok": False,
+            "target_ip": target_ip,
+            "transport": transport,
+            "band": band,
+            "grade": "F",
+            "sent": sent,
+            "received": 0,
+            "loss_pct": 100.0,
+            "min_ms": None,
+            "avg_ms": None,
+            "max_ms": None,
+            "jitter_ms": None,
+            "recommended_bitrate": "0 Mbps（设备未回应）",
+            "summary": f"连续 {sent} 次探测 {target_ip} 全部超时，请确认设备开机且处于同一链路。",
+            "samples_ms": list(rtts_ms),
+        }
+
+    min_ms = round(min(valid), 2)
+    max_ms = round(max(valid), 2)
+    avg_ms = round(sum(valid) / received, 2)
+    if len(valid) >= 2:
+        diffs = [abs(valid[i] - valid[i - 1]) for i in range(1, len(valid))]
+        jitter_ms = round(sum(diffs) / len(diffs), 2)
+    else:
+        jitter_ms = 0.0
+
+    if loss_pct == 0.0 and avg_ms <= 3.0 and jitter_ms <= 1.5:
+        grade = "S"
+        rec_br = "50+ Mbps / 120Hz 满帧无损"
+        summary = "极佳电竞级稳态：几乎零抖动零丢包，可拉满高码率与 120Hz 串流。"
+    elif loss_pct <= 1.0 and avg_ms <= 10.0 and jitter_ms <= 4.0:
+        grade = "A"
+        rec_br = "25–40 Mbps / 60Hz 流畅"
+        summary = "链路表现优秀：延迟与抖动稳定，适合 1080p/2K 60fps 稳定串流。"
+    elif loss_pct <= 3.0 and avg_ms <= 25.0 and jitter_ms <= 12.0:
+        grade = "B"
+        rec_br = "12–20 Mbps（适中码率）"
+        summary = "存在轻度波动：建议控制在 15 Mbps 左右；若处于 2.4G 可考虑切 5GHz 或有线。"
+    else:
+        grade = "C"
+        rec_br = "≤10 Mbps（建议切换有线/5G 热点）"
+        summary = "检测到高抖动或丢包：容易引起画面撕裂或音画滞后，建议排查干扰或改用有线直连。"
+
+    return {
+        "ok": True,
+        "target_ip": target_ip,
+        "transport": transport,
+        "band": band,
+        "grade": grade,
+        "sent": sent,
+        "received": received,
+        "loss_pct": loss_pct,
+        "min_ms": min_ms,
+        "avg_ms": avg_ms,
+        "max_ms": max_ms,
+        "jitter_ms": jitter_ms,
+        "recommended_bitrate": rec_br,
+        "summary": summary,
+        "samples_ms": list(rtts_ms),
+    }
+
+
+def run_link_benchmark(
+    target_ip: str,
+    *,
+    count: int = 12,
+    timeout_ms: int = 600,
+    transport: str = "wired",
+    band: str = "",
+    ping_fn: Callable[[str, int], tuple[bool, float | None]] | None = None,
+) -> dict[str, Any]:
+    """Run an active multi-packet stability benchmark against the target console/handheld IP."""
+    ip_str = (target_ip or "").strip()
+    if not ip_str:
+        return {
+            "ok": False,
+            "target_ip": "",
+            "grade": "F",
+            "summary": "尚未设置目标设备 IPv4，请先在设置或无线局域网栏填写设备 IP。",
+        }
+    try:
+        ipaddress.IPv4Address(ip_str)
+    except ValueError:
+        return {
+            "ok": False,
+            "target_ip": ip_str,
+            "grade": "F",
+            "summary": f"无效的 IPv4 地址：{ip_str}",
+        }
+
+    from wiredeck.probes import _ping_peer
+
+    probe = ping_fn or _ping_peer
+    n = max(4, min(30, int(count or 12)))
+    samples: list[float | None] = []
+    for _ in range(n):
+        ok, rtt = probe(ip_str, timeout_ms)
+        samples.append(rtt if ok and rtt is not None else (0.2 if ok else None))
+    return evaluate_link_benchmark(ip_str, samples, transport=transport, band=band)

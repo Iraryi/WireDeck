@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import ctypes
 import json
 import os
 import re
 import subprocess
 import threading
 import time
+from ctypes import wintypes
 from pathlib import Path
 from typing import Any, Callable
 
@@ -103,13 +105,16 @@ $gpus = @(Get-CimInstance Win32_VideoController -ErrorAction SilentlyContinue | 
     }
 })
 $batt = @(Get-CimInstance Win32_Battery -ErrorAction SilentlyContinue | Select-Object -ExpandProperty BatteryStatus)
+$btPad = @(Get-PnpDevice -Class Bluetooth,HIDClass -Status OK -ErrorAction SilentlyContinue | Where-Object { $_.FriendlyName -match 'Xbox|DualSense|DualShock|Controller|Gamepad|Pro Controller|Switch' } | Select-Object -ExpandProperty FriendlyName)
 @{
     gpus = $gpus
     battery_statuses = $batt
+    bt_gamepads = $btPad
 } | ConvertTo-Json -Depth 4 -Compress
 """
     raw_gpus: list[dict[str, Any]] = []
     battery_statuses: list[int] = []
+    bt_gamepads: list[str] = []
 
     res = runner(ps, 10)
     if res.returncode == 0 and res.stdout.strip():
@@ -126,6 +131,11 @@ $batt = @(Get-CimInstance Win32_Battery -ErrorAction SilentlyContinue | Select-O
                     battery_statuses = [bs]
                 elif isinstance(bs, list):
                     battery_statuses = [int(x) for x in bs if isinstance(x, (int, float))]
+                btp = parsed.get("bt_gamepads")
+                if isinstance(btp, str) and btp.strip():
+                    bt_gamepads = [btp.strip()]
+                elif isinstance(btp, list):
+                    bt_gamepads = [str(x).strip() for x in btp if str(x).strip()]
         except Exception:
             pass
 
@@ -186,6 +196,7 @@ $batt = @(Get-CimInstance Win32_Battery -ErrorAction SilentlyContinue | Select-O
     has_dgpu = any(g["is_discrete"] for g in gpus)
     has_igpu = any(not g["is_discrete"] for g in gpus)
 
+    controllers_info = detect_controllers(bt_names=bt_gamepads)
     return {
         "gpus": gpus,
         "primary_nvidia_gpu": primary_nv,
@@ -195,6 +206,97 @@ $batt = @(Get-CimInstance Win32_Battery -ErrorAction SilentlyContinue | Select-O
         "virtual_displays": virtual_displays,
         "on_battery": any(s == 1 for s in battery_statuses),
         "nvidia_app_installed": _is_nvidia_app_installed(),
+        "controllers": controllers_info,
+    }
+
+
+def _probe_xinput_controllers() -> list[dict[str, Any]]:
+    """Query connected XInput controller slots 0..3 and their battery levels via Win32 ctypes."""
+    if os.name != "nt":
+        return []
+    dll = None
+    for name in ("xinput1_4.dll", "xinput9_1_0.dll"):
+        try:
+            dll = ctypes.WinDLL(name)
+            break
+        except OSError:
+            continue
+    if dll is None:
+        return []
+
+    class _XINPUT_GAMEPAD(ctypes.Structure):
+        _fields_ = [
+            ("wButtons", wintypes.WORD),
+            ("bLeftTrigger", ctypes.c_ubyte),
+            ("bRightTrigger", ctypes.c_ubyte),
+            ("sThumbLX", ctypes.c_short),
+            ("sThumbLY", ctypes.c_short),
+            ("sThumbRX", ctypes.c_short),
+            ("sThumbRY", ctypes.c_short),
+        ]
+
+    class _XINPUT_STATE(ctypes.Structure):
+        _fields_ = [("dwPacketNumber", wintypes.DWORD), ("Gamepad", _XINPUT_GAMEPAD)]
+
+    class _XINPUT_BATTERY_INFORMATION(ctypes.Structure):
+        _fields_ = [("BatteryType", ctypes.c_ubyte), ("BatteryLevel", ctypes.c_ubyte)]
+
+    get_state = dll.XInputGetState
+    get_state.argtypes = [wintypes.DWORD, ctypes.POINTER(_XINPUT_STATE)]
+    get_state.restype = wintypes.DWORD
+    get_batt = getattr(dll, "XInputGetBatteryInformation", None)
+    if get_batt is not None:
+        get_batt.argtypes = [wintypes.DWORD, ctypes.c_ubyte, ctypes.POINTER(_XINPUT_BATTERY_INFORMATION)]
+        get_batt.restype = wintypes.DWORD
+
+    level_map = {0: "empty", 1: "low", 2: "medium", 3: "full"}
+    found: list[dict[str, Any]] = []
+    for slot in range(4):
+        st = _XINPUT_STATE()
+        if get_state(slot, ctypes.byref(st)) != 0:
+            continue
+        conn = "wired"
+        blevel = "wired"
+        if get_batt is not None:
+            binfo = _XINPUT_BATTERY_INFORMATION()
+            if get_batt(slot, 0, ctypes.byref(binfo)) == 0:
+                if binfo.BatteryType == 1:
+                    conn = "wired"
+                    blevel = "wired"
+                elif binfo.BatteryType in (2, 3):
+                    conn = "wireless"
+                    blevel = level_map.get(int(binfo.BatteryLevel), "medium")
+                elif binfo.BatteryType == 0:
+                    conn = "unknown"
+                    blevel = "unknown"
+        found.append({"slot": slot, "connection": conn, "battery_level": blevel})
+    return found
+
+
+def detect_controllers(
+    *,
+    xinput_probe: Callable[[], list[dict[str, Any]]] | None = None,
+    bt_names: list[str] | None = None,
+) -> dict[str, Any]:
+    """Summarize XInput controller count, battery warnings, and Bluetooth gamepad coexistence."""
+    probe_fn = xinput_probe or _probe_xinput_controllers
+    try:
+        ctrls = list(probe_fn() or [])
+    except Exception:
+        ctrls = []
+    bt_list = [str(x).strip() for x in (bt_names or []) if str(x).strip()]
+    low_slots = [
+        int(c.get("slot", 0))
+        for c in ctrls
+        if str(c.get("connection") or "") == "wireless" and str(c.get("battery_level") or "") in ("empty", "low")
+    ]
+    has_bt = bool(bt_list) or any(str(c.get("connection") or "") == "wireless" for c in ctrls)
+    return {
+        "count": len(ctrls),
+        "controllers": ctrls,
+        "bluetooth_names": bt_list,
+        "has_bluetooth_gamepad": has_bt,
+        "low_battery_slots": low_slots,
     }
 
 
@@ -221,6 +323,7 @@ def evaluate_system_health(
     effective_split: dict[str, Any],
     fallback_pending_count: int = 0,
     installed_plugins: list[dict[str, Any]] | None = None,
+    wifi_band_24g: bool = False,
 ) -> dict[str, Any]:
     """Produce a compact whole-system readiness & health summary across power, GPU, storage, and plugins."""
     warnings: list[dict[str, str]] = []
@@ -278,9 +381,39 @@ def evaluate_system_health(
     gpu_txt = f"{nv.get('name')} ({nv.get('driver_version')})" if nv else "集成/通用显卡"
     active_plg = [p for p in (installed_plugins or []) if p.get("valid") and p.get("enabled")]
 
+    ctrl_info = system_env.get("controllers") if isinstance(system_env.get("controllers"), dict) else {}
+    low_slots = [int(x) for x in (ctrl_info.get("low_battery_slots") or [])]
+    has_bt_pad = bool(ctrl_info.get("has_bluetooth_gamepad"))
+    ctrl_cnt = int(ctrl_info.get("count") or 0)
+    if low_slots:
+        warnings.append(
+            {
+                "code": "CONTROLLER_LOW_BATTERY",
+                "title": f"无线手柄电量偏低（槽位 {', '.join('#' + str(s + 1) for s in low_slots)}）",
+                "detail": "建议立即给手柄插线充电，避免串流对战中途断连。",
+            }
+        )
+    if has_bt_pad and wifi_band_24g:
+        warnings.append(
+            {
+                "code": "BT_24G_COEXISTENCE",
+                "title": "蓝牙手柄与 2.4 GHz Wi-Fi 共存干扰",
+                "detail": "同频干扰可能导致手感和画面波动；建议改用有线连接手柄或切回 5 GHz 热点。",
+            }
+        )
+
+    if ctrl_cnt > 0:
+        first = (ctrl_info.get("controllers") or [{}])[0]
+        ctrl_val = f"已连接 {ctrl_cnt} 个 ({'有线' if first.get('connection') == 'wired' else '无线/' + str(first.get('battery_level', ''))})"
+    elif ctrl_info.get("bluetooth_names"):
+        ctrl_val = f"蓝牙手柄在线：{ctrl_info['bluetooth_names'][0]}"
+    else:
+        ctrl_val = "暂未检测到 XInput 手柄"
+
     items = [
         {"id": "power", "label": "供电状态", "value": "电池供电 (建议插电)" if on_battery else "已接交流电源", "ok": not on_battery},
         {"id": "gpu", "label": "显卡与屏幕", "value": f"{gpu_txt} · {system_env.get('primary_resolution', '1920x1080')} @ {max_hz}Hz", "ok": True},
+        {"id": "controller", "label": "游戏手柄", "value": ctrl_val, "ok": not low_slots and not (has_bt_pad and wifi_band_24g)},
         {
             "id": "recorder",
             "label": "录屏与分段",
